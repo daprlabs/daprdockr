@@ -100,6 +100,7 @@ type Instance struct {
 	Service  string
 	Instance int
 	Addrs    []net.IP
+	//PortMappings map[uint16]uint16
 }
 
 func (this *Instance) FullyQualifiedDomainName() string {
