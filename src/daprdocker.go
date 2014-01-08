@@ -1,13 +1,17 @@
 package main
 
-import "fmt"
-import "strconv"
-import "github.com/coreos/go-etcd/etcd"
-import "net"
-import "strings"
-import "encoding/json"
-import "errors"
-import "os"
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"github.com/coreos/go-etcd/etcd"
+	"net"
+	"os"
+	"os/signal"
+	"strconv"
+	"strings"
+	"syscall"
+)
 
 const CONTAINER_DOMAIN_SUFFIX = "container"
 
@@ -15,6 +19,7 @@ func main() {
 	client := etcd.NewClient([]string{"http://192.168.1.10:5003", "http://192.168.1.10:5002", "http://192.168.1.10:5001"})
 	stop := make(chan bool)
 	errors := make(chan error)
+	updateDns := make(chan map[string]*Instance)
 
 	go func() {
 		for err := range errors {
@@ -23,6 +28,8 @@ func main() {
 	}()
 	go func() {
 		for instances := range CurrentInstances(client, stop, &errors) {
+			// Update DNS
+			updateDns <- instances
 
 			UpdateDns(instances)
 
@@ -60,32 +67,23 @@ func main() {
 		}
 		stop <- true
 	}()*/
+	ServeDNS(CONTAINER_DOMAIN_SUFFIX, updateDns)
 
+	// Spin until killed.
 	<-stop
-}
-
-func UpdateDns(instances []*Instance) (err error) {
-	// Open the hosts file in truncate mode
-	hostsFile, err := os.OpenFile("hosts", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
-	if err != nil {
-		return
-	}
-
-	defer hostsFile.Close()
-
-	// Update the host file
-	for _, instance := range instances {
-		for _, entry := range instance.HostEntries() {
-			_, err = hostsFile.Write([]byte(entry + "\n"))
-			if err != nil {
-				return
-			}
+	sig := make(chan os.Signal)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+forever:
+	for {
+		select {
+		case s := <-sig:
+			fmt.Printf("Signal (%d) received, stopping\n", s)
+			break forever
 		}
 	}
+}
 
-	// Reload the DNS server
-	// TODO: Reload the DNS server
-
+func UpdateDns(instances map[string]*Instance) (err error) {
 	return
 }
 
@@ -107,6 +105,7 @@ func (this *Instance) FullyQualifiedDomainName() string {
 	return strconv.Itoa(this.Instance) + "." + this.Service + "." + this.Group + "." + CONTAINER_DOMAIN_SUFFIX
 }
 
+/*
 func (this *Instance) HostEntry(ip net.IP) string {
 	return ip.String() + "\t" + this.FullyQualifiedDomainName()
 }
@@ -119,7 +118,7 @@ func (this *Instance) HostEntries() (entries []string) {
 	}
 
 	return
-}
+}*/
 
 type Operation int
 
@@ -134,7 +133,7 @@ type InstanceUpdate struct {
 }
 
 // Returns a channel publishing the current instances whenever they change.
-func CurrentInstances(client *etcd.Client, stop chan bool, errors *chan error) (currentInstances chan []*Instance) {
+func CurrentInstances(client *etcd.Client, stop chan bool, errors *chan error) (currentInstances chan map[string]*Instance) {
 	currentInstancesMap := make(map[string]*Instance)
 	applyUpdate := func(update *InstanceUpdate) {
 		name := update.Instance.FullyQualifiedDomainName()
@@ -147,21 +146,12 @@ func CurrentInstances(client *etcd.Client, stop chan bool, errors *chan error) (
 		return
 	}
 
-	current := func() (instances []*Instance) {
-		instances = make([]*Instance, 0, len(currentInstancesMap))
-
-		for _, value := range currentInstancesMap {
-			instances = append(instances, value)
-		}
-		return
-	}
-
-	updated := func(update *InstanceUpdate) []*Instance {
+	updated := func(update *InstanceUpdate) map[string]*Instance {
 		applyUpdate(update)
-		return current()
+		return currentInstancesMap
 	}
 
-	currentInstances = make(chan []*Instance)
+	currentInstances = make(chan map[string]*Instance)
 	go func() {
 		for update := range InstanceUpdates(client, stop, errors) {
 			// Mutate the current instances collection
@@ -181,6 +171,7 @@ func InstanceUpdates(client *etcd.Client, stop chan bool, errors *chan error) (i
 		for update := range instanceUpdates {
 			instance, err := parseInstanceUpdate(update)
 			if err != nil && errors != nil {
+				fmt.Fprintf(os.Stderr, "InstanceUpdates encountered an error: %s", err)
 				*errors <- err
 			} else {
 				instances <- instance
@@ -230,9 +221,13 @@ func parseInstanceUpdate(update *etcd.Response) (instanceUpdate *InstanceUpdate,
 	if err != nil {
 		return
 	}
-	instance.Addrs, err = net.LookupIP(update.Node.Value)
-	if err != nil {
-		return
+
+	// Do not attempt to parse value if it is not present.
+	if len(update.Node.Value) > 0 {
+		instance.Addrs, err = net.LookupIP(update.Node.Value)
+		if err != nil {
+			return
+		}
 	}
 
 	instanceUpdate.Instance = instance

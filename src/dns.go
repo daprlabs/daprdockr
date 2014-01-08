@@ -2,13 +2,11 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"github.com/miekg/dns"
 	"net"
 	"os"
-	"os/signal"
-	"strconv"
-	"syscall"
 	"time"
 )
 
@@ -21,7 +19,7 @@ const (
 func createDefaultHandler() (handler func(dns.ResponseWriter, *dns.Msg)) {
 	resolvConf, err := dns.ClientConfigFromFile("/etc/resolv.conf")
 	if err != nil {
-		fmt.Printf("Error! %s", err)
+		fmt.Fprintf(os.Stderr, "Error! %s", err)
 	}
 	externalDns := new(dns.Client)
 
@@ -30,12 +28,12 @@ func createDefaultHandler() (handler func(dns.ResponseWriter, *dns.Msg)) {
 		for _, server := range resolvConf.Servers {
 			response, _, err := externalDns.Exchange(request, server+":"+resolvConf.Port)
 			if err != nil && debug {
-				fmt.Printf("Error handling request: %s\n", err)
+				fmt.Fprintf(os.Stderr, "Error handling request: %s\n", err)
 				continue
 			}
 
 			if debug {
-				fmt.Printf("Default handler response: %s\n", response.String())
+				fmt.Fprintf(os.Stderr, "Default handler response: %s\n", response.String())
 			}
 			writer.WriteMsg(response)
 			break
@@ -44,61 +42,119 @@ func createDefaultHandler() (handler func(dns.ResponseWriter, *dns.Msg)) {
 }
 
 // Creates a handler for container domain requests.
-func createContainerHandler() (handler func(dns.ResponseWriter, *dns.Msg)) {
+func createContainerHandler(currentInstances chan map[string]*Instance) (handler func(dns.ResponseWriter, *dns.Msg)) {
+	var instances *map[string]*Instance
+	go func() {
+		for current := range currentInstances {
+			instances = &current
+		}
+	}()
+
 	return func(writer dns.ResponseWriter, request *dns.Msg) {
+		//var txtResponse       string
+		var responseAddresses []net.IP
 
 		if debug {
-			fmt.Printf("Request: %s\n", request.String())
+			fmt.Fprintf(os.Stderr, "Request: %s\n", request.String())
 		}
 
-		var (
-			ipv4            bool
-			resourceRecord  dns.RR
-			txtResponse     string
-			responseAddress net.IP
-		)
-		// TC must be done here
+		fmt.Fprintf(os.Stderr, "Instances %+v", instances)
+
+		instances := *instances
+		question := request.Question[0]
+		name := question.Name
+
 		response := new(dns.Msg)
 		response.SetReply(request)
 		response.Compress = compress
-		if ip, ok := writer.RemoteAddr().(*net.UDPAddr); ok {
-			txtResponse = "Port: " + strconv.Itoa(ip.Port) + " (udp)"
-			responseAddress = ip.IP
-			ipv4 = responseAddress.To4() != nil
-		}
-		if ip, ok := writer.RemoteAddr().(*net.TCPAddr); ok {
-			txtResponse = "Port: " + strconv.Itoa(ip.Port) + " (tcp)"
-			responseAddress = ip.IP
-			ipv4 = responseAddress.To4() != nil
-		}
 
-		name := request.Question[0].Name
-
-		// Create the resouce record.
-		if ipv4 {
-			resourceRecord = new(dns.A)
-			resourceRecord.(*dns.A).Hdr = dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 0}
-			resourceRecord.(*dns.A).A = responseAddress.To4()
+		// Check that we have a record matching the request
+		if instance, ok := instances[name[0:len(name)-1]]; ok {
+			fmt.Fprintf(os.Stderr, "Found instance! %s", instance.FullyQualifiedDomainName())
+			responseAddresses = instance.Addrs
 		} else {
-			resourceRecord = new(dns.AAAA)
-			resourceRecord.(*dns.AAAA).Hdr = dns.RR_Header{Name: name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: 0}
-			resourceRecord.(*dns.AAAA).AAAA = responseAddress
+			fmt.Fprintf(os.Stderr, "\nCould not find instance for %s\n\n", name)
 		}
 
-		// Tack on a TXT record
-		txtRecord := new(dns.TXT)
-		txtRecord.Hdr = dns.RR_Header{Name: "1234." + name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 0}
-		txtRecord.Txt = []string{txtResponse}
+		addr4 := func(addrs []net.IP) (result net.IP, err error) {
+			for _, addr := range addrs {
+				converted := addr.To4()
+				fmt.Fprintf(os.Stderr, "addr4: Trying %s - %b", addr, converted != nil)
+				if converted != nil {
+					result = converted
+					return
+				}
+			}
 
-		switch request.Question[0].Qtype {
-		case dns.TypeTXT:
-			response.Answer = append(response.Answer, txtRecord)
-			response.Extra = append(response.Extra, resourceRecord)
+			err = errors.New("Unable to find an IPv4 address.")
+			return
+		}
+
+		addr6 := func(addrs []net.IP) (result net.IP, err error) {
+			for _, addr := range addrs {
+				converted := addr.To16()
+				fmt.Fprintf(os.Stderr, "addr6: Trying %s - %b", addr, converted != nil)
+				if converted != nil {
+					result = converted
+					return
+				}
+			}
+
+			err = errors.New("Unable to find an IPv6 address.")
+			return
+		}
+
+		tryARecord := func(addrs []net.IP, name string) (record dns.RR) {
+			if address, err := addr4(responseAddresses); err == nil {
+				record = new(dns.A)
+				record.(*dns.A).Hdr = dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 0}
+				record.(*dns.A).A = address
+			}
+			return
+		}
+
+		tryAAAARecord := func(addrs []net.IP, name string) (record dns.RR) {
+			if address, err := addr6(responseAddresses); err == nil {
+				record = new(dns.AAAA)
+				record.(*dns.AAAA).Hdr = dns.RR_Header{Name: name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: 0}
+				record.(*dns.AAAA).AAAA = address
+			}
+			return
+		}
+
+		/*
+			// Tack on a TXT record
+			txtRecord := new(dns.TXT)
+			txtRecord.Hdr = dns.RR_Header{Name: "1234." + name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 0}
+			txtRecord.Txt = []string{txtResponse}
+		*/
+
+		switch question.Qtype {
+		/*case dns.TypeTXT:
+		response.Answer = append(response.Answer, txtRecord)
+		*/
 		default:
 			fallthrough
-		case dns.TypeAAAA, dns.TypeA:
-			response.Answer = append(response.Answer, resourceRecord)
-			response.Extra = append(response.Extra, txtRecord)
+		case dns.TypeA:
+			answer := tryARecord(responseAddresses, name)
+			if answer == nil {
+				answer = tryAAAARecord(responseAddresses, name)
+			}
+			if answer != nil {
+
+				response.Answer = append(response.Answer, answer)
+			}
+			//response.Extra = append(response.Extra, txtRecord)
+		case dns.TypeAAAA:
+			answer := tryAAAARecord(responseAddresses, name)
+			if answer == nil {
+				answer = tryARecord(responseAddresses, name)
+			}
+			if answer != nil {
+
+				response.Answer = append(response.Answer, answer)
+			}
+			//response.Extra = append(response.Extra, txtRecord)
 		}
 
 		if request.IsTsig() != nil {
@@ -109,7 +165,7 @@ func createContainerHandler() (handler func(dns.ResponseWriter, *dns.Msg)) {
 			}
 		}
 		if debug {
-			fmt.Printf("%v\n", response.String())
+			fmt.Fprintf(os.Stderr, "%v\n", response.String())
 		}
 		writer.WriteMsg(response)
 	}
@@ -119,23 +175,13 @@ func serve(net string) {
 	server := &dns.Server{Addr: ":53", Net: net}
 	err := server.ListenAndServe()
 	if err != nil {
-		fmt.Printf("Failed to setup the "+net+" server: %s\n", err.Error())
+		fmt.Fprintf(os.Stderr, "Failed to setup the "+net+" server: %s\n", err.Error())
 	}
 }
 
-func Start(containerDomainSuffix string) {
-	dns.HandleFunc(containerDomainSuffix+".", createContainerHandler())
+func ServeDNS(containerDomainSuffix string, currentInstances chan map[string]*Instance) {
+	dns.HandleFunc(containerDomainSuffix+".", createContainerHandler(currentInstances))
 	dns.HandleFunc(".", createDefaultHandler())
 	go serve("tcp")
 	go serve("udp")
-	sig := make(chan os.Signal)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-forever:
-	for {
-		select {
-		case s := <-sig:
-			fmt.Printf("Signal (%d) received, stopping\n", s)
-			break forever
-		}
-	}
 }
