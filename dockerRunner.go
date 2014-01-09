@@ -94,13 +94,17 @@ func instantiateService(client *dockerclient.Client, config *ServiceConfig, inst
 			Image:      config.Container.Image,
 		}
 
-		// Stop or kill the named container.
-		err := client.StopContainer(name, ContainerStopTimeout)
-		if err != nil {
-			err = client.KillContainer(name)
+		// Check if the container already exists.
+		container, err := client.InspectContainer(name)
+		if err == nil || container != nil {
+			// Stop or kill the named container.
+			err = client.StopContainer(name, ContainerStopTimeout)
 			if err != nil {
-				ready <- err
-				return
+				err = client.KillContainer(name)
+				if err != nil {
+					ready <- err
+					return
+				}
 			}
 		}
 
@@ -108,7 +112,7 @@ func instantiateService(client *dockerclient.Client, config *ServiceConfig, inst
 		err = client.RemoveContainer(name)
 
 		// Create the new container with the new configuration
-		container, err := client.CreateContainer(creationOptions, containerConfig)
+		container, err = client.CreateContainer(creationOptions, containerConfig)
 		if err != nil {
 			ready <- err
 			return
