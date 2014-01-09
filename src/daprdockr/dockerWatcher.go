@@ -12,7 +12,7 @@ import (
 // Cache the local IP address.
 var localIPs, localIPsErr = InternetRoutedIPs()
 
-func UpdateCurrentStateFromManagedContainers(dockerClient *dockerclient.Client, etcdClient *etcd.Client, stop chan bool, errors *chan error) {
+func PushStateChangesIntoStore(dockerClient *dockerclient.Client, etcdClient *etcd.Client, stop chan bool, errors *chan error) {
 
 	managedContainers := watchManagedContainers(dockerClient, stop, errors)
 	for containers := range managedContainers {
@@ -50,7 +50,7 @@ func watchManagedContainers(client *dockerclient.Client, stop chan bool, errors 
 
 func containerInstanceName(names []string) (result string) {
 	for _, name := range names {
-		if strings.HasSuffix(name, CONTAINER_DOMAIN_SUFFIX) {
+		if strings.HasSuffix(name, ContainerDomainSuffix) {
 			result = name[1:]
 			break
 		}
@@ -71,7 +71,7 @@ func instanceFromContainer(container docker.APIContainers) (instance *Instance, 
 
 func containerIsManaged(names []string) bool {
 	for _, name := range names {
-		if strings.HasSuffix(name, CONTAINER_DOMAIN_SUFFIX) {
+		if strings.HasSuffix(name, ContainerDomainSuffix) {
 			return true
 		}
 	}

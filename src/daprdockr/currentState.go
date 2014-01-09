@@ -18,7 +18,7 @@ type Instance struct {
 }
 
 func (this *Instance) FullyQualifiedDomainName() string {
-	return strconv.Itoa(this.Instance) + "." + this.Service + "." + this.Group + "." + CONTAINER_DOMAIN_SUFFIX
+	return strconv.Itoa(this.Instance) + "." + this.Service + "." + this.Group + "." + ContainerDomainSuffix
 }
 
 func (this *Instance) QualifiedName() string {

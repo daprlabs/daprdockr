@@ -1,7 +1,6 @@
 package main
 
 import (
-	//	"encoding/json"
 	"fmt"
 	"github.com/coreos/go-etcd/etcd"
 	"github.com/fsouza/go-dockerclient"
@@ -9,8 +8,6 @@ import (
 	"os/signal"
 	"syscall"
 )
-
-const CONTAINER_DOMAIN_SUFFIX = "container"
 
 /*
 DaprDocker is an agent for hosting declaratively described services in a cluster.
@@ -26,11 +23,8 @@ service.
 */
 
 func main() {
-	etcdClient := etcd.NewClient([]string{"http://192.168.1.10:5003", "http://192.168.1.10:5002", "http://192.168.1.10:5001"})
 	stop := make(chan bool)
 	errors := make(chan error)
-	updateDns := make(chan map[string]*Instance)
-
 	go func() {
 		for err := range errors {
 			if err != nil {
@@ -39,69 +33,27 @@ func main() {
 		}
 	}()
 
+	// TODO: Make this configurable.
+	etcdClient := etcd.NewClient([]string{"http://192.168.1.10:5003", "http://192.168.1.10:5002", "http://192.168.1.10:5001"})
 	dockerClient, err := docker.NewClient("unix:///var/run/docker.sock")
 	if err != nil {
 		errors <- err
 	}
 
-	go func() {
-		for instances := range CurrentInstances(etcdClient, stop, &errors) {
-			// Update DNS
-			updateDns <- instances
-			/*js, err := json.Marshal(instances)
-			if err != nil {
-				fmt.Printf("Marshalling failed: %s", err)
-				return
-			}
+	// Push changes from the local Docker instance into etcd.
+	go PushStateChangesIntoStore(dockerClient, etcdClient, stop, &errors)
 
-			fmt.Printf("Update: %s \n\n", js)
-			*/
-		}
-		close(errors)
-	}()
+	// Start a DNS server so that the addresses of service instances can be resolved.
+	go ServeDNS(CurrentInstances(etcdClient, stop, &errors), &errors)
 
-	go func() {
-		for required := range RequiredStateChanges(etcdClient, stop, &errors) {
-			/*			js, err := json.Marshal(required)
-						if err != nil {
-							fmt.Printf("Marshalling failed: %s", err)
-							return
-						}*/
+	// TODO: Manage local HTTP load balancer config
+	// go PushStateChangesIntoHttpLoadBalancer(dockerClient, etcdClient, stop &errors)
 
-			fmt.Println("==")
-			for key, change := range required {
-				fmt.Printf("[%s] %s\n", change.Operation, key)
-				if change.Operation == Add {
-					err := <-PrepareForService(dockerClient, change.ServiceConfig)
-					if err != nil {
-						errors <- err
-						continue
-					}
+	// Pull required state changes from the store and attempt to apply them locally.
+	go ApplyRequiredStateChanges(dockerClient, etcdClient, stop, &errors)
 
-					errors <- <-InstantiateService(dockerClient, change.ServiceConfig, change.Instance)
-				}
-			}
-			fmt.Println("==")
-			/*
-				fmt.Printf("REQUIRED: %s \n\n", js)*/
-		}
-	}()
-	/*
-		go func() {
-			for i := 0; i < 12; i++ {
-				instance := strconv.Itoa(i)
-				service := []string{"web", "db"}[i%2]
-				group := "freebay-" + []string{"prod", "ppe", "test"}[i%3]
-
-				response, err := etcdClient.Set("instances/"+group+"/"+service+"/"+instance, "127.0.0.1", 50)
-				if err != nil {
-					fmt.Printf("Error: %s\n", err.Error())
-				}
-				fmt.Printf("[%s] Key: %s Value: %s\n", response.Action, response.Node.Key, response.Node.Value)
-			}
-			stop <- true
-		}()*/
-
+	// TODO: remove this.
+	// Push in some test data
 	go func() {
 		for i := 0; i < 12; i++ {
 			config := new(ServiceConfig)
@@ -114,50 +66,6 @@ func main() {
 		}
 		return
 	}()
-
-	go UpdateCurrentStateFromManagedContainers(dockerClient, etcdClient, stop, &errors)
-
-	/*
-		go func() {
-			for containers := range WatchManagedContainers(dockerClient, stop, &errors) {
-				for _, container := range containers {
-					fmt.Printf("Container: %s @ %s\n\tAKA: %s\n", container.ID, container.Image, strings.Join(container.Names, ", "))
-				}
-			}
-		}()*/
-
-	/*	go func() {
-
-		if err != nil {
-			return
-		}
-		listContainersOptions := docker.ListContainersOptions{All: true}
-		containers, err := dockerClient.ListContainers(listContainersOptions)
-		if err != nil {
-			return
-		}
-
-		for _, container := range containers {
-			js, err := json.Marshal(container)
-			if err != nil {
-				return
-			}
-
-			fmt.Printf("Container: %s \n\n", js)
-		}
-
-		return
-	}()*/
-
-	/*go c.Watch("instances", 0, true, instanceUpdates, stop)
-	go func() {
-		for i := 0; i < 10; i++ {
-			response := <-instanceUpdates
-			fmt.Printf("UPDATE [%s] Key: %s Value: %s\n", response.Action, response.Node.Key, response.Node.Value)
-		}
-		stop <- true
-	}()*/
-	ServeDNS(CONTAINER_DOMAIN_SUFFIX, updateDns, &errors)
 
 	// Spin until killed.
 	<-stop
@@ -172,21 +80,3 @@ forever:
 		}
 	}
 }
-
-/*
-
-config/services/
- ... service definitions ...
- service:
-   instances: <num>
-   hostPrefix: <string>
-   group: <string>
-   dockerOptions: [<string>]
-   image: <string>
-   httpHostName: <string>
-   ... https info? ...
-
-instances/<group>/<hostPrefix>/<0..instances>
-	<ip address> with 10-second TTL
-
-*/

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/coreos/go-etcd/etcd"
 	"github.com/dotcloud/docker"
 	dockerclient "github.com/fsouza/go-dockerclient"
 	"os"
@@ -12,8 +13,33 @@ const (
 	ContainerStopTimeout = 30 // seconds
 )
 
+// Pull required state changes from the store and attempt to apply them locally.
+func ApplyRequiredStateChanges(dockerClient *dockerclient.Client, etcdClient *etcd.Client, stop chan bool, errors *chan error) {
+	for required := range RequiredStateChanges(etcdClient, stop, errors) {
+		for _, change := range required {
+			if change.Operation == Add {
+				err := <-prepareForService(dockerClient, change.ServiceConfig)
+				if err != nil {
+					if errors != nil {
+						*errors <- err
+					}
+					continue
+				}
+
+				// TODO: Acquire a lock before instantiation
+				ready := instantiateService(dockerClient, change.ServiceConfig, change.Instance)
+				err = <-ready
+				close(ready)
+				if err != nil && errors != nil {
+					*errors <- err
+				}
+			}
+		}
+	}
+}
+
 // Prepares for a service to be instantiated by pulling the container's image.
-func PrepareForService(client *dockerclient.Client, config *ServiceConfig) (ready chan error) {
+func prepareForService(client *dockerclient.Client, config *ServiceConfig) (ready chan error) {
 	ready = make(chan error)
 	go func() {
 		//TODO: Account for different registries.
@@ -56,7 +82,7 @@ func PrepareForService(client *dockerclient.Client, config *ServiceConfig) (read
 }
 
 // Instantiate a service from the provided configuration.
-func InstantiateService(client *dockerclient.Client, config *ServiceConfig, instance int) (ready chan error) {
+func instantiateService(client *dockerclient.Client, config *ServiceConfig, instance int) (ready chan error) {
 	ready = make(chan error)
 	go func() {
 		name := config.FullyQualifiedDomainName(instance)

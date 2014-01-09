@@ -18,7 +18,7 @@ func (id *ServiceIdentifier) QualifiedName() string {
 }
 
 func (id *ServiceIdentifier) FullyQualifiedDomainName(instance int) string {
-	return strconv.Itoa(instance) + "." + id.QualifiedName() + "." + CONTAINER_DOMAIN_SUFFIX
+	return strconv.Itoa(instance) + "." + id.QualifiedName() + "." + ContainerDomainSuffix
 }
 
 func (id *ServiceIdentifier) Key() string {

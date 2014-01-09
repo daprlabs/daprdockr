@@ -11,9 +11,28 @@ import (
 )
 
 const (
-	debug    = false
-	compress = false
+	debug                 = false
+	compress              = false
+	ContainerDomainSuffix = "container"
 )
+
+// Start a DNS server so that the addresses of service instances can be resolved.
+func ServeDNS(currentInstances chan map[string]*Instance, errorChan *chan error) {
+	dns.HandleFunc(ContainerDomainSuffix+".", createContainerHandler(currentInstances, errorChan))
+	dns.HandleFunc(".", createDefaultHandler(errorChan))
+	go serve("tcp", errorChan)
+	go serve("udp", errorChan)
+
+	// TODO: How do we stop this thing?
+}
+
+func serve(net string, errorChan *chan error) {
+	server := &dns.Server{Addr: ":53", Net: net}
+	err := server.ListenAndServe()
+	if err != nil && errorChan != nil {
+		*errorChan <- err
+	}
+}
 
 // Creates a handler which proxies requests via the host system's configured DNS servers.
 func createDefaultHandler(errorChan *chan error) (handler func(dns.ResponseWriter, *dns.Msg)) {
@@ -175,19 +194,4 @@ func createContainerHandler(currentInstances chan map[string]*Instance, errorCha
 		}
 		writer.WriteMsg(response)
 	}
-}
-
-func serve(net string, errorChan *chan error) {
-	server := &dns.Server{Addr: ":53", Net: net}
-	err := server.ListenAndServe()
-	if err != nil && errorChan != nil {
-		*errorChan <- err
-	}
-}
-
-func ServeDNS(containerDomainSuffix string, currentInstances chan map[string]*Instance, errorChan *chan error) {
-	dns.HandleFunc(containerDomainSuffix+".", createContainerHandler(currentInstances, errorChan))
-	dns.HandleFunc(".", createDefaultHandler(errorChan))
-	go serve("tcp", errorChan)
-	go serve("udp", errorChan)
 }
