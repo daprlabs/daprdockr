@@ -23,7 +23,7 @@ func ServeDNS(currentInstances chan map[string]*Instance, errorChan *chan error)
 	go serve("tcp", errorChan)
 	go serve("udp", errorChan)
 
-	// TODO: How do we stop this thing?
+	// TODO: When https://github.com/miekg/dns implements .Stop(), leverage that here.
 }
 
 func serve(net string, errorChan *chan error) {
