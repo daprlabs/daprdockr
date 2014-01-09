@@ -16,10 +16,12 @@ const (
 )
 
 // Creates a handler which proxies requests via the host system's configured DNS servers.
-func createDefaultHandler() (handler func(dns.ResponseWriter, *dns.Msg)) {
+func createDefaultHandler(errorChan *chan error) (handler func(dns.ResponseWriter, *dns.Msg)) {
 	resolvConf, err := dns.ClientConfigFromFile("/etc/resolv.conf")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error! %s", err)
+		if errorChan != nil {
+			*errorChan <- err
+		}
 	}
 	externalDns := new(dns.Client)
 
@@ -27,8 +29,13 @@ func createDefaultHandler() (handler func(dns.ResponseWriter, *dns.Msg)) {
 
 		for _, server := range resolvConf.Servers {
 			response, _, err := externalDns.Exchange(request, server+":"+resolvConf.Port)
-			if err != nil && debug {
-				fmt.Fprintf(os.Stderr, "Error handling request: %s\n", err)
+			if err != nil {
+				if debug {
+					fmt.Fprintf(os.Stderr, "Error handling request: %s\n", err)
+				}
+				if errorChan != nil {
+					*errorChan <- err
+				}
 				continue
 			}
 
@@ -42,7 +49,7 @@ func createDefaultHandler() (handler func(dns.ResponseWriter, *dns.Msg)) {
 }
 
 // Creates a handler for container domain requests.
-func createContainerHandler(currentInstances chan map[string]*Instance) (handler func(dns.ResponseWriter, *dns.Msg)) {
+func createContainerHandler(currentInstances chan map[string]*Instance, errorChan *chan error) (handler func(dns.ResponseWriter, *dns.Msg)) {
 	var instances *map[string]*Instance
 	go func() {
 		for current := range currentInstances {
@@ -58,8 +65,6 @@ func createContainerHandler(currentInstances chan map[string]*Instance) (handler
 			fmt.Fprintf(os.Stderr, "Request: %s\n", request.String())
 		}
 
-		fmt.Fprintf(os.Stderr, "Instances %+v", instances)
-
 		instances := *instances
 		question := request.Question[0]
 		name := question.Name
@@ -70,16 +75,14 @@ func createContainerHandler(currentInstances chan map[string]*Instance) (handler
 
 		// Check that we have a record matching the request
 		if instance, ok := instances[name[0:len(name)-1]]; ok {
-			fmt.Fprintf(os.Stderr, "Found instance! %s", instance.FullyQualifiedDomainName())
 			responseAddresses = instance.Addrs
-		} else {
+		} else if debug {
 			fmt.Fprintf(os.Stderr, "\nCould not find instance for %s\n\n", name)
 		}
 
 		addr4 := func(addrs []net.IP) (result net.IP, err error) {
 			for _, addr := range addrs {
 				converted := addr.To4()
-				fmt.Fprintf(os.Stderr, "addr4: Trying %s - %b", addr, converted != nil)
 				if converted != nil {
 					result = converted
 					return
@@ -93,7 +96,6 @@ func createContainerHandler(currentInstances chan map[string]*Instance) (handler
 		addr6 := func(addrs []net.IP) (result net.IP, err error) {
 			for _, addr := range addrs {
 				converted := addr.To16()
-				fmt.Fprintf(os.Stderr, "addr6: Trying %s - %b", addr, converted != nil)
 				if converted != nil {
 					result = converted
 					return
@@ -109,6 +111,8 @@ func createContainerHandler(currentInstances chan map[string]*Instance) (handler
 				record = new(dns.A)
 				record.(*dns.A).Hdr = dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 0}
 				record.(*dns.A).A = address
+			} else if errorChan != nil {
+				*errorChan <- err
 			}
 			return
 		}
@@ -118,6 +122,8 @@ func createContainerHandler(currentInstances chan map[string]*Instance) (handler
 				record = new(dns.AAAA)
 				record.(*dns.AAAA).Hdr = dns.RR_Header{Name: name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: 0}
 				record.(*dns.AAAA).AAAA = address
+			} else if errorChan != nil {
+				*errorChan <- err
 			}
 			return
 		}
@@ -171,17 +177,17 @@ func createContainerHandler(currentInstances chan map[string]*Instance) (handler
 	}
 }
 
-func serve(net string) {
+func serve(net string, errorChan *chan error) {
 	server := &dns.Server{Addr: ":53", Net: net}
 	err := server.ListenAndServe()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to setup the "+net+" server: %s\n", err.Error())
+	if err != nil && errorChan != nil {
+		*errorChan <- err
 	}
 }
 
-func ServeDNS(containerDomainSuffix string, currentInstances chan map[string]*Instance) {
-	dns.HandleFunc(containerDomainSuffix+".", createContainerHandler(currentInstances))
-	dns.HandleFunc(".", createDefaultHandler())
-	go serve("tcp")
-	go serve("udp")
+func ServeDNS(containerDomainSuffix string, currentInstances chan map[string]*Instance, errorChan *chan error) {
+	dns.HandleFunc(containerDomainSuffix+".", createContainerHandler(currentInstances, errorChan))
+	dns.HandleFunc(".", createDefaultHandler(errorChan))
+	go serve("tcp", errorChan)
+	go serve("udp", errorChan)
 }

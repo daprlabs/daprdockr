@@ -56,7 +56,8 @@ func RequiredStateChanges(client *etcd.Client, stop chan bool, errors *chan erro
 						change.Operation = Add
 						delta[key] = change
 					} else {
-						// Check that instance matches the service config - easiest thing to do is delete the instance and wait for it to be re-added. Ensure good monitoring for equality issues.
+						// Check that instance matches the service config - easiest thing to do is delete the instance
+						// and wait for it to be re-added. Ensure good monitoring for equality issues.
 					}
 				}
 			}

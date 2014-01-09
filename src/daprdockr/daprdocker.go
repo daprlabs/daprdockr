@@ -157,7 +157,7 @@ func main() {
 		}
 		stop <- true
 	}()*/
-	ServeDNS(CONTAINER_DOMAIN_SUFFIX, updateDns)
+	ServeDNS(CONTAINER_DOMAIN_SUFFIX, updateDns, &errors)
 
 	// Spin until killed.
 	<-stop

@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"github.com/coreos/go-etcd/etcd"
 	"net"
 	"strconv"
@@ -48,26 +47,13 @@ type InstanceUpdate struct {
 	Instance  *Instance
 }
 
-//TODO:
-/*
-
-
-
-func GetInstances(client *etcd.Client) (instances map[string]*Instance)
-
-
-
-
-*/
-
 func UpdateInstance(client *etcd.Client, instance *Instance) (err error) {
 
 	payload, err := json.Marshal(instance)
-	fmt.Println(instance)
 	if err != nil {
 		return
 	}
-	_ /*response*/, err = client.Set("instances/"+instance.Group+"/"+instance.Service+"/"+strconv.Itoa(instance.Instance), string(payload), 10)
+	_, err = client.Set("instances/"+instance.Group+"/"+instance.Service+"/"+strconv.Itoa(instance.Instance), string(payload), 10)
 	if err != nil {
 		return
 	}

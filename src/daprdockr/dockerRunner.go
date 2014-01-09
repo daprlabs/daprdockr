@@ -12,6 +12,7 @@ const (
 	ContainerStopTimeout = 30 // seconds
 )
 
+// Prepares for a service to be instantiated by pulling the container's image.
 func PrepareForService(client *dockerclient.Client, config *ServiceConfig) (ready chan error) {
 	ready = make(chan error)
 	go func() {

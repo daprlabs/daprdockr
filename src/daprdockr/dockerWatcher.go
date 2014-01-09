@@ -14,7 +14,7 @@ var localIPs, localIPsErr = InternetRoutedIPs()
 
 func UpdateCurrentStateFromManagedContainers(dockerClient *dockerclient.Client, etcdClient *etcd.Client, stop chan bool, errors *chan error) {
 
-	managedContainers := WatchManagedContainers(dockerClient, stop, errors)
+	managedContainers := watchManagedContainers(dockerClient, stop, errors)
 	for containers := range managedContainers {
 		for _, container := range containers {
 			instance, err := instanceFromContainer(container)
@@ -27,6 +27,25 @@ func UpdateCurrentStateFromManagedContainers(dockerClient *dockerclient.Client, 
 			}
 		}
 	}
+}
+
+func watchManagedContainers(client *dockerclient.Client, stop chan bool, errors *chan error) (managedContainers chan []docker.APIContainers) {
+	managedContainers = make(chan []docker.APIContainers)
+	go func() {
+		defer close(managedContainers)
+		for containers := range watchContainers(client, stop, errors) {
+			currentManagedContainers := make([]docker.APIContainers, 0, 5)
+			for _, container := range containers {
+				if containerIsManaged(container.Names) {
+					currentManagedContainers = append(currentManagedContainers, container)
+				}
+			}
+
+			managedContainers <- currentManagedContainers
+		}
+	}()
+
+	return
 }
 
 func containerInstanceName(names []string) (result string) {
@@ -50,25 +69,6 @@ func instanceFromContainer(container docker.APIContainers) (instance *Instance, 
 	return
 }
 
-func WatchManagedContainers(client *dockerclient.Client, stop chan bool, errors *chan error) (managedContainers chan []docker.APIContainers) {
-	managedContainers = make(chan []docker.APIContainers)
-	go func() {
-		defer close(managedContainers)
-		for containers := range WatchContainers(client, stop, errors) {
-			currentManagedContainers := make([]docker.APIContainers, 0, 5)
-			for _, container := range containers {
-				if containerIsManaged(container.Names) {
-					currentManagedContainers = append(currentManagedContainers, container)
-				}
-			}
-
-			managedContainers <- currentManagedContainers
-		}
-	}()
-
-	return
-}
-
 func containerIsManaged(names []string) bool {
 	for _, name := range names {
 		if strings.HasSuffix(name, CONTAINER_DOMAIN_SUFFIX) {
@@ -78,7 +78,7 @@ func containerIsManaged(names []string) bool {
 	return false
 }
 
-func WatchContainers(client *dockerclient.Client, stop chan bool, errors *chan error) (containers chan []docker.APIContainers) {
+func watchContainers(client *dockerclient.Client, stop chan bool, errors *chan error) (containers chan []docker.APIContainers) {
 	containers = make(chan []docker.APIContainers)
 	go func() {
 		defer close(containers)
