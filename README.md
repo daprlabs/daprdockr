@@ -1,3 +1,6 @@
+=== DO NOT USE THIS JUST YET ==
+It's currently very much just for experimentation.
+
 DaprDocker is an agent for hosting declaratively described services in a cluster.
 The system stores both desired and current state in etcd. DaprDocker agents on each host read desired state and race to
 satisfy it, using etcd as a distributed lock manager. Heartbeats from agent machines keep the current state up-to-date.

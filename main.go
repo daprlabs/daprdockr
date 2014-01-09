@@ -55,7 +55,6 @@ func main() {
 	}()
 
 	// Spin until killed.
-	<-stop
 	sig := make(chan os.Signal)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 forever:
