@@ -1,12 +1,12 @@
 package main
 
 import (
-	"encoding/json"
+	//	"encoding/json"
 	"fmt"
 	"github.com/coreos/go-etcd/etcd"
+	"github.com/fsouza/go-dockerclient"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 )
 
@@ -26,23 +26,28 @@ service.
 */
 
 func main() {
-	client := etcd.NewClient([]string{"http://192.168.1.10:5003", "http://192.168.1.10:5002", "http://192.168.1.10:5001"})
+	etcdClient := etcd.NewClient([]string{"http://192.168.1.10:5003", "http://192.168.1.10:5002", "http://192.168.1.10:5001"})
 	stop := make(chan bool)
 	errors := make(chan error)
 	updateDns := make(chan map[string]*Instance)
 
 	go func() {
 		for err := range errors {
-			fmt.Printf("Error: %s\n", err)
+			if err != nil {
+				fmt.Printf("Error: %s\n", err)
+			}
 		}
 	}()
+
+	dockerClient, err := docker.NewClient("unix:///var/run/docker.sock")
+	if err != nil {
+		errors <- err
+	}
+
 	go func() {
-		for instances := range CurrentInstances(client, stop, &errors) {
+		for instances := range CurrentInstances(etcdClient, stop, &errors) {
 			// Update DNS
 			updateDns <- instances
-
-			UpdateDns(instances)
-
 			/*js, err := json.Marshal(instances)
 			if err != nil {
 				fmt.Printf("Marshalling failed: %s", err)
@@ -56,31 +61,93 @@ func main() {
 	}()
 
 	go func() {
-		for required := range RequiredStateChanges(client, stop, &errors) {
-			js, err := json.Marshal(required)
-			if err != nil {
-				fmt.Printf("Marshalling failed: %s", err)
-				return
-			}
+		for required := range RequiredStateChanges(etcdClient, stop, &errors) {
+			/*			js, err := json.Marshal(required)
+						if err != nil {
+							fmt.Printf("Marshalling failed: %s", err)
+							return
+						}*/
 
-			fmt.Printf("REQUIRED: %s \n\n", js)
+			fmt.Println("==")
+			for key, change := range required {
+				fmt.Printf("[%s] %s\n", change.Operation, key)
+				if change.Operation == Add {
+					err := <-PrepareForService(dockerClient, change.ServiceConfig)
+					if err != nil {
+						errors <- err
+						continue
+					}
+
+					errors <- <-InstantiateService(dockerClient, change.ServiceConfig, change.Instance)
+				}
+			}
+			fmt.Println("==")
+			/*
+				fmt.Printf("REQUIRED: %s \n\n", js)*/
 		}
 	}()
+	/*
+		go func() {
+			for i := 0; i < 12; i++ {
+				instance := strconv.Itoa(i)
+				service := []string{"web", "db"}[i%2]
+				group := "freebay-" + []string{"prod", "ppe", "test"}[i%3]
+
+				response, err := etcdClient.Set("instances/"+group+"/"+service+"/"+instance, "127.0.0.1", 50)
+				if err != nil {
+					fmt.Printf("Error: %s\n", err.Error())
+				}
+				fmt.Printf("[%s] Key: %s Value: %s\n", response.Action, response.Node.Key, response.Node.Value)
+			}
+			stop <- true
+		}()*/
 
 	go func() {
 		for i := 0; i < 12; i++ {
-			instance := strconv.Itoa(i)
-			service := []string{"web", "db"}[i%2]
-			group := "freebay-" + []string{"prod", "ppe", "test"}[i%3]
-
-			response, err := client.Set("instances/"+group+"/"+service+"/"+instance, "127.0.0.1", 50)
-			if err != nil {
-				fmt.Printf("Error: %s\n", err.Error())
-			}
-			fmt.Printf("[%s] Key: %s Value: %s\n", response.Action, response.Node.Key, response.Node.Value)
+			config := new(ServiceConfig)
+			config.Group = "freebay-prod"
+			config.Instances = 5
+			config.Name = "web"
+			config.Container.Image = "base/devel"
+			config.Container.Command = []string{"/bin/sh", "-c", "sleep 100"}
+			SetServiceConfig(etcdClient, config)
 		}
-		stop <- true
+		return
 	}()
+
+	go UpdateCurrentStateFromManagedContainers(dockerClient, etcdClient, stop, &errors)
+
+	/*
+		go func() {
+			for containers := range WatchManagedContainers(dockerClient, stop, &errors) {
+				for _, container := range containers {
+					fmt.Printf("Container: %s @ %s\n\tAKA: %s\n", container.ID, container.Image, strings.Join(container.Names, ", "))
+				}
+			}
+		}()*/
+
+	/*	go func() {
+
+		if err != nil {
+			return
+		}
+		listContainersOptions := docker.ListContainersOptions{All: true}
+		containers, err := dockerClient.ListContainers(listContainersOptions)
+		if err != nil {
+			return
+		}
+
+		for _, container := range containers {
+			js, err := json.Marshal(container)
+			if err != nil {
+				return
+			}
+
+			fmt.Printf("Container: %s \n\n", js)
+		}
+
+		return
+	}()*/
 
 	/*go c.Watch("instances", 0, true, instanceUpdates, stop)
 	go func() {
@@ -104,10 +171,6 @@ forever:
 			break forever
 		}
 	}
-}
-
-func UpdateDns(instances map[string]*Instance) (err error) {
-	return
 }
 
 /*

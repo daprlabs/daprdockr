@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/coreos/go-etcd/etcd"
 	"net"
 	"strconv"
@@ -9,9 +11,9 @@ import (
 )
 
 type Instance struct {
-	Group    string
-	Service  string
-	Instance int
+	Group    string `json:"-"`
+	Service  string `json:"-"`
+	Instance int    `json:"-"`
 	Addrs    []net.IP
 	//PortMappings map[uint16]uint16
 }
@@ -31,6 +33,16 @@ const (
 	Remove
 )
 
+func (op Operation) String() (result string) {
+	switch op {
+	case Add:
+		result = "add"
+	case Remove:
+		result = "remove"
+	}
+	return
+}
+
 type InstanceUpdate struct {
 	Operation Operation
 	Instance  *Instance
@@ -47,6 +59,20 @@ func GetInstances(client *etcd.Client) (instances map[string]*Instance)
 
 
 */
+
+func UpdateInstance(client *etcd.Client, instance *Instance) (err error) {
+
+	payload, err := json.Marshal(instance)
+	fmt.Println(instance)
+	if err != nil {
+		return
+	}
+	_ /*response*/, err = client.Set("instances/"+instance.Group+"/"+instance.Service+"/"+strconv.Itoa(instance.Instance), string(payload), 10)
+	if err != nil {
+		return
+	}
+	return
+}
 
 // Returns a channel publishing the current instances whenever they change.
 func CurrentInstances(client *etcd.Client, stop chan bool, errors *chan error) (currentInstances chan map[string]*Instance) {
@@ -139,7 +165,7 @@ func parseInstanceUpdate(update *etcd.Response) (instanceUpdate *InstanceUpdate,
 
 	// Do not attempt to parse value if it is not present.
 	if len(update.Node.Value) > 0 {
-		instance.Addrs, err = net.LookupIP(update.Node.Value)
+		err = json.Unmarshal([]byte(update.Node.Value), instance)
 		if err != nil {
 			return
 		}

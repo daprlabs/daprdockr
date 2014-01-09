@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"github.com/coreos/go-etcd/etcd"
+	"strconv"
 	"strings"
 )
 
@@ -14,6 +15,10 @@ type ServiceIdentifier struct {
 
 func (id *ServiceIdentifier) QualifiedName() string {
 	return id.Name + "." + id.Group
+}
+
+func (id *ServiceIdentifier) FullyQualifiedDomainName(instance int) string {
+	return strconv.Itoa(instance) + "." + id.QualifiedName() + "." + CONTAINER_DOMAIN_SUFFIX
 }
 
 func (id *ServiceIdentifier) Key() string {
@@ -127,7 +132,7 @@ func ServiceConfigUpdates(client *etcd.Client, stop chan bool, errors *chan erro
 
 // Parses a service config from an update response and returns the config.
 func parseServiceConfigUpdate(response *etcd.Response) (update *ServiceConfigUpdate, err error) {
-	keyParts := strings.Split(response.Node.Key, "/")[2:]
+	keyParts := strings.Split(response.Node.Key, "/")[3:]
 	update = new(ServiceConfigUpdate)
 
 	update.Operation, err = parseActionToOperation(response.Action)
