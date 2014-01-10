@@ -30,11 +30,14 @@ func main() {
 	// Push changes from the local Docker instance into etcd.
 	go PushStateChangesIntoStore(dockerClient, etcdClient, stop, &errors)
 
-	// Start a DNS server so that the addresses of service instances can be resolved.
-	go ServeDNS(CurrentInstances(etcdClient, stop, &errors), &errors)
+	// Pull changes to the currently running instances so that updates can be propagated
+	dnsInstances, lbInstances := duplicateInstancesChan(CurrentInstances(etcdClient, stop, &errors))
 
-	// TODO: Manage local HTTP load balancer config
-	// go PushStateChangesIntoHttpLoadBalancer(dockerClient, etcdClient, stop &errors)
+	// Start a DNS server so that the addresses of service instances can be resolved.
+	go ServeDNS(dnsInstances, &errors)
+
+	// Start an HTTP load balancer so that configured sites can be correctly served.
+	go StartLoadBalancer(lbInstances, stop, &errors)
 
 	// Pull required state changes from the store and attempt to apply them locally.
 	go ApplyRequiredStateChanges(dockerClient, etcdClient, stop, &errors)
@@ -65,4 +68,25 @@ forever:
 			break forever
 		}
 	}
+}
+
+func duplicateInstancesChan(instancesChan chan map[string]*Instance) (one chan map[string]*Instance, two chan map[string]*Instance) {
+	one = make(chan map[string]*Instance, 2)
+	two = make(chan map[string]*Instance, 2)
+	go func() {
+		defer close(one)
+		defer close(two)
+		for {
+			select {
+			case instances, ok := <-instancesChan:
+				if !ok {
+					break
+				}
+				one <- instances
+				two <- instances
+			}
+		}
+	}()
+
+	return
 }

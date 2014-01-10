@@ -1,6 +1,7 @@
 package main
 
 import (
+	goerrors "errors"
 	"github.com/coreos/go-etcd/etcd"
 	"github.com/dotcloud/docker"
 	dockerclient "github.com/fsouza/go-dockerclient"
@@ -35,6 +36,9 @@ func ApplyRequiredStateChanges(dockerClient *dockerclient.Client, etcdClient *et
 				}
 			}
 		}
+	}
+	if errors != nil {
+		*errors <- goerrors.New("Exiting ApplyRequiredStateChanges")
 	}
 }
 
@@ -94,7 +98,7 @@ func instantiateService(client *dockerclient.Client, config *ServiceConfig, inst
 			Image:      config.Container.Image,
 		}
 
-		// Check if the container already exists.
+		// Check if the container already exists and therefore whether it needs to be stopped.
 		container, err := client.InspectContainer(name)
 		if err == nil || container != nil {
 			// Stop or kill the named container.
@@ -106,10 +110,14 @@ func instantiateService(client *dockerclient.Client, config *ServiceConfig, inst
 					return
 				}
 			}
-		}
 
-		// Remove the stopped container, ignoring any potential error.
-		err = client.RemoveContainer(name)
+			// Remove the stopped container, ignoring any potential error.
+			err = client.RemoveContainer(name)
+			if err != nil {
+				ready <- err
+				return
+			}
+		}
 
 		// Create the new container with the new configuration
 		container, err = client.CreateContainer(creationOptions, containerConfig)

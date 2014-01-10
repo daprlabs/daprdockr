@@ -1,6 +1,7 @@
 package main
 
 import (
+	goerrors "errors"
 	"github.com/coreos/go-etcd/etcd"
 	"github.com/dotcloud/docker"
 	dockerclient "github.com/fsouza/go-dockerclient"
@@ -13,8 +14,8 @@ import (
 var localIPs, localIPsErr = InternetRoutedIPs()
 
 func PushStateChangesIntoStore(dockerClient *dockerclient.Client, etcdClient *etcd.Client, stop chan bool, errors *chan error) {
-
 	managedContainers := watchManagedContainers(dockerClient, stop, errors)
+	defer close(managedContainers)
 	for containers := range managedContainers {
 		for _, container := range containers {
 			instance, err := instanceFromContainer(container)
@@ -26,6 +27,9 @@ func PushStateChangesIntoStore(dockerClient *dockerclient.Client, etcdClient *et
 				*errors <- err
 			}
 		}
+	}
+	if errors != nil {
+		*errors <- goerrors.New("Exiting PushStateChangesIntoStore")
 	}
 }
 
@@ -42,6 +46,36 @@ func watchManagedContainers(client *dockerclient.Client, stop chan bool, errors 
 			}
 
 			managedContainers <- currentManagedContainers
+		}
+		if errors != nil {
+			*errors <- goerrors.New("Exiting watchManagedContainers")
+		}
+	}()
+
+	return
+}
+
+func watchContainers(client *dockerclient.Client, stop chan bool, errors *chan error) (containers chan []docker.APIContainers) {
+	containers = make(chan []docker.APIContainers)
+	go func() {
+		defer close(containers)
+		for {
+			select {
+			case <-stop:
+				break
+			case <-time.After(5 * time.Second):
+				newContainers, err := getContainers(client)
+				if err != nil {
+					if errors != nil {
+						*errors <- err
+					}
+				} else {
+					containers <- newContainers
+				}
+			}
+		}
+		if errors != nil {
+			*errors <- goerrors.New("Exiting watchContainers")
 		}
 	}()
 
@@ -76,30 +110,6 @@ func containerIsManaged(names []string) bool {
 		}
 	}
 	return false
-}
-
-func watchContainers(client *dockerclient.Client, stop chan bool, errors *chan error) (containers chan []docker.APIContainers) {
-	containers = make(chan []docker.APIContainers)
-	go func() {
-		defer close(containers)
-		for {
-			select {
-			case <-stop:
-				break
-			case <-time.After(5 * time.Second):
-				newContainers, err := getContainers(client)
-				if err != nil {
-					if errors != nil {
-						*errors <- err
-					}
-				} else {
-					containers <- newContainers
-				}
-			}
-		}
-	}()
-
-	return
 }
 
 func getContainers(client *dockerclient.Client) (containers []docker.APIContainers, err error) {

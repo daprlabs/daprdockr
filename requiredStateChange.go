@@ -1,9 +1,13 @@
 package main
 
 import (
+	goerrors "errors"
 	"github.com/coreos/go-etcd/etcd"
 	"strconv"
+	"time"
 )
+
+var RequiredStateChangeRetry = time.Second * 30
 
 type RequiredStateChange struct {
 	ServiceConfig *ServiceConfig
@@ -20,7 +24,9 @@ func RequiredStateChanges(client *etcd.Client, stop chan bool, errors *chan erro
 
 	changes = make(chan map[string]*RequiredStateChange)
 	go func() {
-
+		defer close(currentInstances)
+		defer close(currentServiceConfigs)
+		defer close(changes)
 		desired := make(map[string]*ServiceConfig)
 		current := make(map[string]*Instance)
 
@@ -40,6 +46,7 @@ func RequiredStateChanges(client *etcd.Client, stop chan bool, errors *chan erro
 				current = newInstances
 			case _, _ = <-stop:
 				break loop
+			case _ = <-time.After(RequiredStateChangeRetry):
 			}
 
 			// Find the delta between desired and current state.
@@ -74,15 +81,17 @@ func RequiredStateChanges(client *etcd.Client, stop chan bool, errors *chan erro
 				}
 			}
 
-			changes <- delta
+			if len(delta) > 0 {
+
+				changes <- delta
+			}
+		}
+		if errors != nil {
+			*errors <- goerrors.New("Exiting RequiredStateChanges")
 		}
 
 		stopInstances <- true
 		stopServiceConfigs <- true
-		close(stopInstances)
-		close(stopServiceConfigs)
-		close(stop)
-		close(changes)
 		return
 	}()
 	return

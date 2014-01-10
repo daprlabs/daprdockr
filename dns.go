@@ -166,7 +166,6 @@ func createContainerHandler(currentInstances chan map[string]*Instance, errorCha
 				answer = tryAAAARecord(responseAddresses, name)
 			}
 			if answer != nil {
-
 				response.Answer = append(response.Answer, answer)
 			}
 			//response.Extra = append(response.Extra, txtRecord)
@@ -186,7 +185,7 @@ func createContainerHandler(currentInstances chan map[string]*Instance, errorCha
 			if writer.TsigStatus() == nil {
 				response.SetTsig(request.Extra[len(request.Extra)-1].(*dns.TSIG).Hdr.Name, dns.HmacMD5, 300, time.Now().Unix())
 			} else if debug {
-				println("Status", writer.TsigStatus().Error())
+				fmt.Fprintf(os.Stderr, "Status", writer.TsigStatus().Error())
 			}
 		}
 		if debug {
