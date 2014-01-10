@@ -1,13 +1,13 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	goerrors "errors"
 	"github.com/coreos/go-etcd/etcd"
 	"log"
 	"net"
+	"reflect"
 	"strconv"
 	"strings"
 )
@@ -39,33 +39,8 @@ func (this *Instance) String() string {
 	return this.QualifiedName() + "@" + strings.Join(addrs, ",") + "{" + strings.Join(ports, ",") + "}"
 }
 
-// TODO: Consider using reflect.DeepEqual.
 func (this *Instance) Equals(other *Instance) (equal bool) {
-	if this == other {
-		return true
-	}
-	equal = this.Group == other.Group &&
-		this.Service == other.Service &&
-		this.Instance == other.Instance &&
-		len(this.Addrs) == len(other.Addrs) &&
-		len(this.PortMappings) == len(other.PortMappings)
-	if !equal {
-		return
-	}
-	for i := range this.Addrs {
-		if !bytes.Equal(this.Addrs[i], other.Addrs[i]) {
-			equal = false
-			return
-		}
-	}
-	for key, thisVal := range this.PortMappings {
-		otherVal, exists := other.PortMappings[key]
-		if !exists || otherVal != thisVal {
-			equal = false
-			return
-		}
-	}
-	return
+	return reflect.DeepEqual(this, other)
 }
 
 func (this *Instance) FullyQualifiedDomainName() string {

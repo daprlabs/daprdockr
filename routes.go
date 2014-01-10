@@ -135,7 +135,7 @@ func parseRoutes4(interfaces map[string]net.Interface) (routes []RouteEntry, err
 	if err != nil {
 		return
 	}
-	systemRouteLines := strings.Split(string(systemRouteText), ".\n")
+	systemRouteLines := strings.Split(string(systemRouteText), "\n")
 	for _, routeText := range systemRouteLines[1:] {
 		if len(routeText) < 2 {
 			continue

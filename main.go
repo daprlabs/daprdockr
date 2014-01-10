@@ -29,7 +29,7 @@ func main() {
 	go func() {
 		for err := range errors {
 			if err != nil {
-				log.Printf("[DaprDockr] Error: %s\n", err)
+				log.Printf("[DaprDockr] Error: %s.\n", err)
 			}
 		}
 	}()
@@ -91,7 +91,7 @@ forever:
 	for {
 		select {
 		case s := <-sig:
-			log.Printf("Signal (%d) received, stopping\n", s)
+			log.Printf("Signal (%d) received, stopping.\n", s)
 			break forever
 		}
 	}
