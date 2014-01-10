@@ -11,3 +11,13 @@ For example, 1.web.myapp.container will point to instance 1 of the "web" service
 
 State change hooks also allow an Nginx server to load balance HTTP requests over the healthy containers in a Web
 service.
+
+
+= Features =
+- HTTP Load Balancer / Reverse Proxy support for containers via Nginx
+- DNS Server for looking up the current location of a container.
+
+= Planned =
+- DNS SRV records for discovering port mappings
+
+= Usage =

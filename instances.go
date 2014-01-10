@@ -139,6 +139,7 @@ func CurrentInstances(client *etcd.Client, stop chan bool) (currentInstances cha
 }
 
 func getAllInstances(client *etcd.Client, instances chan *InstanceUpdate) {
+	log.Printf("[Instances] Pulling all instances.\n")
 	response, err := client.Get("instances", false, true)
 	if err != nil {
 		log.Printf("[Instances] Unable to get instances directory: %s.\n", err)
@@ -166,6 +167,7 @@ func getAllInstances(client *etcd.Client, instances chan *InstanceUpdate) {
 			}
 		}
 	}
+	log.Printf("[Instances] Pulled instances.\n")
 }
 
 // Returns a channel of all instance updates.
@@ -204,7 +206,7 @@ func instanceUpdates(client *etcd.Client, stop chan bool) (updates chan *Instanc
 			if err != nil {
 				log.Printf("[Instances] Unable to parse instance update: %s.\n", err)
 				continue
-			} else if instance != nil {
+			} else {
 				updates <- instance
 			}
 		}
@@ -261,7 +263,7 @@ func parseInstance(node *etcd.Node) (instance *Instance, err error) {
 		}
 	} else {
 		// This is a lock node.
-		// Note that this is not an error.
+		err = errors.New("Attempted to parse lock node.")
 		instance = nil
 	}
 	return
@@ -277,7 +279,8 @@ func parseInstanceUpdate(update *etcd.Response) (instanceUpdate *InstanceUpdate,
 	}
 
 	instance, err := parseInstance(update.Node)
-	if instance == nil {
+
+	if err != nil {
 		instanceUpdate = nil
 	} else {
 		instanceUpdate.Instance = instance

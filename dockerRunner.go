@@ -130,7 +130,7 @@ func instantiateService(client *dockerclient.Client, config *ServiceConfig, inst
 	}
 
 	// Check if the container already exists and therefore whether it needs to be stopped.
-	// tryRemoveContainer(client, config, instance)
+	tryRemoveContainer(client, config, instance)
 
 	// Create the new container with the new configuration
 	container, err := client.CreateContainer(creationOptions, containerConfig)

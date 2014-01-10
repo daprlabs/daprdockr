@@ -129,21 +129,22 @@ func GetServiceConfig(client *etcd.Client, group, name string) (config *ServiceC
 	return
 }
 func getServiceConfigs(client *etcd.Client, serviceConfigs chan *ServiceConfigUpdate) {
+	log.Printf("[ServiceConfig] Pulling all configurations.\n")
 	response, err := client.Get("config/services", false, true)
 	if err != nil {
-		log.Printf("[ServiceConfig] Unable to get services: %s\n", err)
+		log.Printf("[ServiceConfig] Unable to get services: %s.\n", err)
 		return
 	}
 	for _, node := range response.Node.Nodes {
 		r, err := client.Get(node.Key, false, true)
 		if err != nil {
-			log.Printf("[ServiceConfig] Unable to get service configurations: %s\n", err)
+			log.Printf("[ServiceConfig] Unable to get service configurations: %s.\n", err)
 			continue
 		}
 		for _, iNode := range r.Node.Nodes {
 			serviceConfig, err := parseServiceConfig(&iNode)
 			if err != nil {
-				log.Printf("[ServiceConfig] Unable to parse configuration: %s\n", err)
+				log.Printf("[ServiceConfig] Unable to parse configuration: %s.\n", err)
 				continue
 			}
 
@@ -153,6 +154,7 @@ func getServiceConfigs(client *etcd.Client, serviceConfigs chan *ServiceConfigUp
 			serviceConfigs <- serviceConfigUpdate
 		}
 	}
+	log.Printf("[ServiceConfig] Pulled configurations.\n")
 }
 
 // Returns a channel of all service configuration updates.
