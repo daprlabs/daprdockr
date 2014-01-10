@@ -1,4 +1,4 @@
-package main
+package daprdockr
 
 import (
 	"encoding/json"
@@ -10,11 +10,13 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
-	UpdateTimeToLive = 20 // Seconds
-	LockTimeToLive   = 60 // Seconds
+	UpdateTimeToLive         = 20 // Seconds
+	LockTimeToLive           = 60 // Seconds
+	FullInstanceSyncInterval = 60 // Seconds
 )
 
 type Instance struct {
@@ -96,7 +98,7 @@ func LockInstance(client *etcd.Client, instance int, service *ServiceConfig) (er
 }
 
 // Returns a channel publishing the current instances whenever they change.
-func CurrentInstances(client *etcd.Client, stop chan bool, errors *chan error) (currentInstances chan map[string]*Instance) {
+func CurrentInstances(client *etcd.Client, stop chan bool) (currentInstances chan map[string]*Instance) {
 	currentInstancesMap := make(map[string]*Instance)
 
 	updated := func(update *InstanceUpdate) (instances map[string]*Instance, changed bool) {
@@ -122,7 +124,7 @@ func CurrentInstances(client *etcd.Client, stop chan bool, errors *chan error) (
 	currentInstances = make(chan map[string]*Instance, 10)
 	go func() {
 		defer close(currentInstances)
-		for update := range instanceUpdates(client, stop, errors) {
+		for update := range instanceUpdates(client, stop) {
 			// Mutate the current instances collection and publish it.
 			newCurrentInstances, changed := updated(update)
 			if changed {
@@ -130,85 +132,81 @@ func CurrentInstances(client *etcd.Client, stop chan bool, errors *chan error) (
 			}
 		}
 
-		if errors != nil {
-			*errors <- goerrors.New("Exiting CurrentInstances")
-		}
+		log.Printf("[Instances] Exiting.\n")
 	}()
 
 	return
 }
 
-func getInstances(client *etcd.Client, errors *chan error, instances chan *InstanceUpdate) (waitIndex uint64, err error) {
+func getAllInstances(client *etcd.Client, instances chan *InstanceUpdate) {
 	response, err := client.Get("instances", false, true)
 	if err != nil {
+		log.Printf("[Instances] Unable to get instances directory: %s.\n", err)
 		return
 	}
-	waitIndex = response.Node.ModifiedIndex + 1
 
-	go func() {
-		for _, n := range response.Node.Nodes {
-			for _, node := range n.Nodes {
-				r, err := client.Get(node.Key, false, true)
-				if err != nil && errors != nil {
-					*errors <- err
+	for _, n := range response.Node.Nodes {
+		for _, node := range n.Nodes {
+			r, err := client.Get(node.Key, false, true)
+			if err != nil {
+				log.Printf("[Instances] Unable to get instance: %s.\n", err)
+				continue
+			}
+			for _, iNode := range r.Node.Nodes {
+				instance, err := parseInstance(&iNode)
+				if err != nil {
+					log.Printf("[Instances] Unable to parse instance: %s.\n", err)
 					continue
 				}
-				for _, iNode := range r.Node.Nodes {
-					instance, err := parseInstance(&iNode)
-					if err != nil && errors != nil {
-						*errors <- err
-						continue
-					}
 
-					instanceUpdate := new(InstanceUpdate)
-					instanceUpdate.Operation = Add
-					instanceUpdate.Instance = instance
-					instances <- instanceUpdate
-				}
+				instanceUpdate := new(InstanceUpdate)
+				instanceUpdate.Operation = Add
+				instanceUpdate.Instance = instance
+				instances <- instanceUpdate
 			}
 		}
-	}()
-	return
+	}
 }
 
 // Returns a channel of all instance updates.
-func instanceUpdates(client *etcd.Client, stop chan bool, errors *chan error) (instances chan *InstanceUpdate) {
-	instances = make(chan *InstanceUpdate, 10)
-	updates := make(chan *etcd.Response, 10)
-	_, err := getInstances(client, errors, instances)
-	if err != nil {
-		if errors != nil {
-			*errors <- err
-		}
-		return
-	}
+func instanceUpdates(client *etcd.Client, stop chan bool) (updates chan *InstanceUpdate) {
+	updates = make(chan *InstanceUpdate)
+	incomingUpdates := make(chan *etcd.Response)
 
 	go func() {
+		watchChan := make(chan *etcd.Response)
+		go func() {
+			for {
+				select {
+				case <-stop:
+					break
+				default:
+				}
+				client.Watch("instances", 0, true, watchChan, stop)
+			}
+		}()
+		getAllInstances(client, updates)
 		for {
 			select {
 			case <-stop:
 				break
-			default:
+			case <-time.After(FullInstanceSyncInterval * time.Second):
+				getAllInstances(client, updates)
+			case incomingUpdate := <-watchChan:
+				incomingUpdates <- incomingUpdate
 			}
-			client.Watch("instances", 0, true, updates, stop)
 		}
 	}()
 	go func() {
-		defer close(updates)
-		for update := range updates {
+		defer close(incomingUpdates)
+		for update := range incomingUpdates {
 			instance, err := parseInstanceUpdate(update)
 			if err != nil {
-				if errors != nil {
-					*errors <- err
-				}
+				log.Printf("[Instances] Unable to parse instance update: %s.\n", err)
 				continue
 			} else if instance != nil {
-				instances <- instance
+				updates <- instance
 			}
-		}
-
-		if errors != nil {
-			*errors <- goerrors.New("Exiting instanceUpdates")
 		}
 	}()
 	return

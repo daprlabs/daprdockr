@@ -1,7 +1,6 @@
-package main
+package daprdockr
 
 import (
-	goerrors "errors"
 	"github.com/coreos/go-etcd/etcd"
 	"github.com/dotcloud/docker"
 	dockerclient "github.com/fsouza/go-dockerclient"
@@ -18,77 +17,39 @@ const (
 // Cache the local IP address.
 var localIPs, localIPsErr = InternetRoutedIPs()
 
-func PushStateChangesIntoStore(dockerClient *dockerclient.Client, etcdClient *etcd.Client, stop chan bool, errors *chan error) {
-	managedContainers := watchManagedContainers(dockerClient, stop, errors)
-	defer close(managedContainers)
-	for containers := range managedContainers {
-		for _, container := range containers {
-			instance, err := instanceFromContainer(container)
-			if err != nil && errors != nil {
-				*errors <- err
-				continue
-			}
-			err = UpdateInstance(etcdClient, instance)
-			if err != nil && errors != nil {
-				*errors <- err
-				continue
-			}
-			log.Printf("[DockerWatcher] Updated entry for %s.\n", instance)
-		}
-	}
-	if errors != nil {
-		*errors <- goerrors.New("Exiting PushStateChangesIntoStore")
-	}
-}
+func PushStateChangesIntoStore(dockerClient *dockerclient.Client, etcdClient *etcd.Client, stop chan bool) {
+	for {
+		select {
+		case <-stop:
+			break
+		case <-time.After(DockerWatcherPollInterval * time.Second):
+			containers, err := getContainers(dockerClient)
 
-func watchManagedContainers(client *dockerclient.Client, stop chan bool, errors *chan error) (managedContainers chan []docker.APIContainers) {
-	managedContainers = make(chan []docker.APIContainers, 10)
-	go func() {
-		defer close(managedContainers)
-		for containers := range watchContainers(client, stop, errors) {
-			currentManagedContainers := make([]docker.APIContainers, 0, 5)
+			if err != nil {
+				log.Printf("[DockerWatcher] Error getting containers: %s.\n", err)
+				continue
+			}
 			for _, container := range containers {
-				if containerIsManaged(container.Names) {
-					currentManagedContainers = append(currentManagedContainers, container)
-				}
-			}
-
-			managedContainers <- currentManagedContainers
-		}
-		if errors != nil {
-			*errors <- goerrors.New("Exiting watchManagedContainers")
-		}
-	}()
-
-	return
-}
-
-func watchContainers(client *dockerclient.Client, stop chan bool, errors *chan error) (containers chan []docker.APIContainers) {
-	containers = make(chan []docker.APIContainers, 10)
-	go func() {
-		defer close(containers)
-		for {
-			select {
-			case <-stop:
-				break
-			case <-time.After(DockerWatcherPollInterval * time.Second):
-				newContainers, err := getContainers(client)
-				if err != nil {
-					if errors != nil {
-						*errors <- err
-					}
+				if !containerIsManaged(container.Names) {
+					// This container isn't managed by this system.
 					continue
-				} else {
-					containers <- newContainers
 				}
+				instance, err := instanceFromContainer(container)
+				if err != nil {
+					log.Printf("[DockerWatcher] Updated deriving instance from container %s for %s.\n", container, err)
+					continue
+				}
+				err = UpdateInstance(etcdClient, instance)
+				if err != nil {
+					log.Printf("[DockerWatcher] Error updating instance %s: %s.\n", instance, err)
+					continue
+				}
+				log.Printf("[DockerWatcher] Heartbeat %s.\n", instance.QualifiedName())
 			}
 		}
-		if errors != nil {
-			*errors <- goerrors.New("Exiting watchContainers")
-		}
-	}()
+	}
 
-	return
+	log.Printf("[DockerWatcher] Exiting.\n")
 }
 
 func containerInstanceName(names []string) (result string) {

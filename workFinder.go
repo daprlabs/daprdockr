@@ -1,7 +1,6 @@
-package main
+package daprdockr
 
 import (
-	goerrors "errors"
 	"log"
 	"time"
 )
@@ -19,12 +18,14 @@ type ServiceState struct {
 	Instances []*Instance
 }
 
-func RequiredStateChanges(instances chan map[string]*Instance, serviceConfigs chan map[string]*ServiceConfig, stop chan bool, errors *chan error) (changes chan map[string]*RequiredStateChange) {
+func RequiredStateChanges(instances chan map[string]*Instance, serviceConfigs chan map[string]*ServiceConfig, stop chan bool) (changes chan map[string]*RequiredStateChange) {
 	changes = make(chan map[string]*RequiredStateChange, 10)
 	go func() {
 		defer close(changes)
 		desired := make(map[string]*ServiceConfig)
 		current := make(map[string]*Instance)
+
+		instancesValid, configsValid := false, false
 
 		for {
 			// Wait for a state change or exit condition.
@@ -34,14 +35,24 @@ func RequiredStateChanges(instances chan map[string]*Instance, serviceConfigs ch
 					break
 				}
 				desired = newServiceConfigs
+				configsValid = true
 			case newInstances, ok := <-instances:
 				if !ok {
 					break
 				}
 				current = newInstances
+				instancesValid = true
 			case _, _ = <-stop:
 				break
 			case _ = <-time.After(RequiredStateChangeRetry):
+			}
+			if !instancesValid {
+				log.Printf("[WorkFinder] Waiting for both instance status before creating work.\n")
+				continue
+			}
+			if !configsValid {
+				log.Printf("[WorkFinder] Waiting for both configuration before creating work.\n")
+				continue
 			}
 
 			// Find the delta between desired and current state.
@@ -57,7 +68,7 @@ func RequiredStateChanges(instances chan map[string]*Instance, serviceConfigs ch
 						change.Instance = i
 						change.Operation = Add
 						delta[key] = change
-						log.Printf("[WorkFinder] Need to %s %s.\n", change.Operation.String(), key)
+						log.Printf("[WorkFinder] Need to start %s.\n", key)
 					} else {
 						// ToDo: Check that instance matches the service config - easiest thing to do is delete the instance
 						// and wait for it to be re-added. Ensure good monitoring for equality issues.
@@ -67,26 +78,28 @@ func RequiredStateChanges(instances chan map[string]*Instance, serviceConfigs ch
 
 			// Check for deletions.
 			for _, instance := range current {
-				key := instance.Service + "." + instance.Group
-				if _ /*serviceConfig*/, exists := desired[key]; !exists {
+				serviceKey := instance.Service + "." + instance.Group
+				if serviceConfig, exists := desired[serviceKey]; !exists || serviceConfig.Instances <= instance.Instance {
+					key := serviceConfig.InstanceQualifiedName(instance.Instance)
 					// This instance must be deleted.
 					change := new(RequiredStateChange)
+					change.ServiceConfig = new(ServiceConfig)
+					change.ServiceConfig.Name = instance.Service
+					change.ServiceConfig.Group = instance.Group
 					change.Instance = instance.Instance
 					change.Operation = Remove
 					delta[key] = change
-					log.Printf("[WorkFinder] Need to %s %d.%s.\n", change.Operation.String(), change.Instance, key)
+					log.Printf("[WorkFinder] Need to remove %s.\n", key)
 				}
 			}
 
 			if len(delta) > 0 {
 				changes <- delta
 			} else {
-				log.Println("[WorkFinder] All services seem healthy.")
+				log.Println("[WorkFinder] All services seem healthy, no work posted.")
 			}
 		}
-		if errors != nil {
-			*errors <- goerrors.New("Exiting RequiredStateChanges")
-		}
+		log.Printf("[WorkFinder] Exiting.\n")
 	}()
 	return
 }

@@ -1,5 +1,5 @@
 // DNS proxy server.
-package main
+package daprdockr
 
 import (
 	"errors"

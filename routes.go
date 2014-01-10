@@ -1,5 +1,5 @@
 // TODO: understand how IPv6 routing works...
-package main
+package daprdockr
 
 import (
 	"bytes"

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"daprdockr"
 	"flag"
 	"github.com/coreos/go-etcd/etcd"
 	"github.com/fsouza/go-dockerclient"
@@ -38,21 +39,21 @@ func main() {
 	etcdClient := etcd.NewClient([]string{"http://192.168.1.10:5003", "http://192.168.1.10:5002", "http://192.168.1.10:5001"})
 	dockerClient, err := docker.NewClient("unix:///var/run/docker.sock")
 	if err != nil {
-		errors <- err
+		log.Printf("[DaprDockr] Failed to create Docker client: %s.\n", err)
 	}
 
 	// Push changes from the local Docker instance into etcd.
-	go PushStateChangesIntoStore(dockerClient, etcdClient, stop, &errors)
+	go daprdockr.PushStateChangesIntoStore(dockerClient, etcdClient, stop)
 
 	// Pull changes to the currently running instances so that updates can be propagated
-	instanceUpdates := []chan map[string]*Instance{
-		make(chan map[string]*Instance, 1),
-		make(chan map[string]*Instance, 1),
-		make(chan map[string]*Instance, 1),
+	instanceUpdates := []chan map[string]*daprdockr.Instance{
+		make(chan map[string]*daprdockr.Instance, 1),
+		make(chan map[string]*daprdockr.Instance, 1),
+		make(chan map[string]*daprdockr.Instance, 1),
 	}
 
 	go func() {
-		for instances := range CurrentInstances(etcdClient, stop, &errors) {
+		for instances := range daprdockr.CurrentInstances(etcdClient, stop) {
 			for _, ch := range instanceUpdates {
 				ch <- instances
 			}
@@ -60,15 +61,15 @@ func main() {
 	}()
 
 	// Pull required state changes from the store and attempt to apply them locally.
-	serviceConfigs := CurrentServiceConfigs(etcdClient, stop, &errors)
-	requiredChanges := RequiredStateChanges(instanceUpdates[0], serviceConfigs, stop, &errors)
-	go ApplyRequiredStateChanges(dockerClient, etcdClient, requiredChanges, stop, &errors)
+	serviceConfigs := daprdockr.CurrentServiceConfigs(etcdClient, stop)
+	requiredChanges := daprdockr.RequiredStateChanges(instanceUpdates[0], serviceConfigs, stop)
+	go daprdockr.ApplyRequiredStateChanges(dockerClient, etcdClient, requiredChanges, stop)
 
 	// Start a DNS server so that the addresses of service instances can be resolved.
-	go StartDnsServer(instanceUpdates[1], &errors)
+	go daprdockr.StartDnsServer(instanceUpdates[1], &errors)
 
 	// Start an HTTP load balancer so that configured sites can be correctly served.
-	go StartLoadBalancer(etcdClient, instanceUpdates[2], stop, &errors)
+	go daprdockr.StartLoadBalancer(etcdClient, instanceUpdates[2], stop, &errors)
 
 	// TODO: remove this.
 	// Push in some test data

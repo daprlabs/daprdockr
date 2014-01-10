@@ -1,4 +1,4 @@
-package main
+package daprdockr
 
 import (
 	"encoding/json"
@@ -9,6 +9,11 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
+)
+
+const (
+	FullServiceConfigSyncInterval = 65
 )
 
 // Uniquely identifies a service.
@@ -42,9 +47,9 @@ type ServiceHttpConfig struct {
 }
 
 type ServiceConfig struct {
-	ServiceIdentifier `json:"-"`
-	Instances         int
-	Container         docker.Config
+	ServiceIdentifier
+	Instances int
+	Container docker.Config
 	// The Docker container image used to pull and run the container
 	Http ServiceHttpConfig
 	// TODO: Add [Web] hooks?
@@ -76,7 +81,7 @@ func DeleteService(client *etcd.Client, id *ServiceIdentifier) (err error) {
 }
 
 // Returns a channel publishing the current service configs whenever they change.
-func CurrentServiceConfigs(client *etcd.Client, stop chan bool, errors *chan error) (currentServiceConfigs chan map[string]*ServiceConfig) {
+func CurrentServiceConfigs(client *etcd.Client, stop chan bool) (currentServiceConfigs chan map[string]*ServiceConfig) {
 	serviceConfigMap := make(map[string]*ServiceConfig)
 	updated := func(update *ServiceConfigUpdate) (newServiceConfigMap map[string]*ServiceConfig, changed bool) {
 		newServiceConfigMap = serviceConfigMap
@@ -99,20 +104,15 @@ func CurrentServiceConfigs(client *etcd.Client, stop chan bool, errors *chan err
 	currentServiceConfigs = make(chan map[string]*ServiceConfig)
 	go func() {
 		defer close(currentServiceConfigs)
-		for update := range serviceConfigUpdates(client, stop, errors) {
+		for update := range serviceConfigUpdates(client, stop) {
 			// Mutate the current service configs collection
 			newServiceConfigMap, changed := updated(update)
 			if changed {
 				log.Println("[ServiceConfig] Configuration updated.")
 				currentServiceConfigs <- newServiceConfigMap
-			} else {
-				log.Println("[ServiceConfig] NoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAa")
 			}
-
 		}
-		if errors != nil {
-			*errors <- goerrors.New("Exiting CurrentServiceConfigs")
-		}
+		log.Println("[ServiceConfig] Exiting.")
 	}()
 
 	return
@@ -128,22 +128,22 @@ func GetServiceConfig(client *etcd.Client, group, name string) (config *ServiceC
 	}
 	return
 }
-func getServiceConfigs(client *etcd.Client, errors *chan error, serviceConfigs chan *ServiceConfigUpdate) {
+func getServiceConfigs(client *etcd.Client, serviceConfigs chan *ServiceConfigUpdate) {
 	response, err := client.Get("config/services", false, true)
-	if err != nil && errors != nil {
-		*errors <- err
+	if err != nil {
+		log.Printf("[ServiceConfig] Unable to get services: %s\n", err)
 		return
 	}
 	for _, node := range response.Node.Nodes {
 		r, err := client.Get(node.Key, false, true)
-		if err != nil && errors != nil {
-			*errors <- err
+		if err != nil {
+			log.Printf("[ServiceConfig] Unable to get service configurations: %s\n", err)
 			continue
 		}
 		for _, iNode := range r.Node.Nodes {
 			serviceConfig, err := parseServiceConfig(&iNode)
-			if err != nil && errors != nil {
-				*errors <- err
+			if err != nil {
+				log.Printf("[ServiceConfig] Unable to parse configuration: %s\n", err)
 				continue
 			}
 
@@ -156,24 +156,44 @@ func getServiceConfigs(client *etcd.Client, errors *chan error, serviceConfigs c
 }
 
 // Returns a channel of all service configuration updates.
-func serviceConfigUpdates(client *etcd.Client, stop chan bool, errors *chan error) (updates chan *ServiceConfigUpdate) {
+func serviceConfigUpdates(client *etcd.Client, stop chan bool) (updates chan *ServiceConfigUpdate) {
 	updates = make(chan *ServiceConfigUpdate)
 	incomingUpdates := make(chan *etcd.Response)
-	go getServiceConfigs(client, errors, updates)
-	go client.Watch("config/services", 0, true, incomingUpdates, stop)
+
+	go func() {
+		getServiceConfigs(client, updates)
+		watchChan := make(chan *etcd.Response)
+		go func() {
+			for {
+				select {
+				case <-stop:
+					break
+				default:
+				}
+				client.Watch("config/services", 0, true, incomingUpdates, stop)
+			}
+		}()
+		for {
+			select {
+			case <-stop:
+				break
+			case <-time.After(FullServiceConfigSyncInterval * time.Second):
+				getServiceConfigs(client, updates)
+			case update := <-watchChan:
+				incomingUpdates <- update
+			}
+		}
+	}()
 	go func() {
 		defer close(incomingUpdates)
 		for update := range incomingUpdates {
 			config, err := parseServiceConfigUpdate(update)
-			if err != nil && errors != nil {
-				*errors <- err
+			if err != nil {
+				log.Printf("[ServiceConfig] Unable to parse update: %s\n", err)
+				continue
 			} else {
 				updates <- config
 			}
-		}
-
-		if errors != nil {
-			*errors <- goerrors.New("Exiting CurrentServiceConfigs")
 		}
 	}()
 	return
