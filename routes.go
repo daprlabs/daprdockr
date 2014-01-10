@@ -199,7 +199,6 @@ func parseRoutes6(interfaces map[string]net.Interface) (routes []RouteEntry, err
 }
 func parseRoute6(routeText string, interfaces map[string]net.Interface) (route RouteEntry, err error) {
 	columns := strings.Fields(routeText)
-	fmt.Printf("Columns (%d): %s\n", len(columns), strings.Join(columns, ", "))
 	if len(columns) < 10 {
 		err = errors.New("Insufficient columnns in route entry")
 		return

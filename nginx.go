@@ -2,26 +2,33 @@ package main
 
 import (
 	"bytes"
-	"fmt"
+	"github.com/coreos/go-etcd/etcd"
 	"io/ioutil"
+	"log"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"text/template"
+	"time"
 )
 
 const (
-	NginxConfigFilePerms os.FileMode = 0644
+	NginxConfigFilePerms            os.FileMode = 0644
+	LoadBalancerWaitBetweenLaunches             = 5 // Seconds
 )
 
 // TODO: Load from file
+// TODO: Give higher weight to backends which are on the local machine. Alternatively, mark all remote hosts as 'backup' servers.
 const NginxConfigurationTemplate = `
 events { 
 	use epoll; 
 	worker_connections 51200; 
 }
 
-http { {{range . }}
+http {
+	resolver 127.0.0.1;
+	{{range . }}
 	upstream {{.Name}}.lb { {{range .Servers}}
 		server {{.}};{{end}}
 	}
@@ -49,21 +56,19 @@ type SiteConfig struct {
 const pidFile = "/tmp/nginx.pid"
 const configFile = "/tmp/nginx.conf"
 
-func StartLoadBalancer(currentInstances chan map[string]*Instance, stop chan bool, errorChan *chan error) {
-	reload := make(chan bool, 1)
+func StartLoadBalancer(etcdClient *etcd.Client, currentInstances chan map[string]*Instance, stop chan bool, errorChan *chan error) {
+	reload := make(chan bool)
 	defer close(reload)
 	start := make(chan bool, 1)
 	defer close(start)
 
 	// Keep load balancer running.
 	go func() {
+		starting := false
 		var cmd *exec.Cmd
 		for {
 			select {
-			case _, ok := <-stop:
-				if !ok {
-					break
-				}
+			case _, _ = <-stop:
 				break
 			case _, ok := <-start:
 				if !ok {
@@ -71,9 +76,10 @@ func StartLoadBalancer(currentInstances chan map[string]*Instance, stop chan boo
 				}
 
 				// The process is not running, run it.
-				fmt.Println("Starting Load Balancer")
+				log.Println("[LoadBalancer] Starting.")
 				exec.Command("nginx", "-g", "pid "+pidFile+";", "-s", "stop").Run()
 				cmd = exec.Command("nginx", "-g", "daemon off; pid "+pidFile+";", "-c", configFile)
+				starting = true
 				go runLoadBalancer(cmd, start, errorChan)
 			case _, ok := <-reload:
 				if !ok {
@@ -81,10 +87,11 @@ func StartLoadBalancer(currentInstances chan map[string]*Instance, stop chan boo
 				}
 
 				// Reload configuration.
-				fmt.Println("Reloading Load Balancer")
+				log.Println("[LoadBalancer] Reloading configuration.")
 				if cmd != nil && cmd.Process != nil {
+					starting = false
 					cmd.Process.Signal(syscall.SIGHUP)
-				} else {
+				} else if !starting {
 					start <- true
 				}
 			}
@@ -94,17 +101,14 @@ func StartLoadBalancer(currentInstances chan map[string]*Instance, stop chan boo
 	// Initially run the load balancer
 	for {
 		select {
-		case _, ok := <-stop:
-			if !ok {
-				break
-			}
+		case _, _ = <-stop:
 			break
 		case instances, ok := <-currentInstances:
 			if !ok {
 				break
 			}
 
-			err := updateLoadBalancerConfig(instances)
+			err := updateLoadBalancerConfig(etcdClient, instances)
 			if err != nil && errorChan != nil {
 				*errorChan <- err
 				continue
@@ -113,33 +117,66 @@ func StartLoadBalancer(currentInstances chan map[string]*Instance, stop chan boo
 
 		}
 	}
-	fmt.Println("Exiting Load Balancer")
+	log.Println("[LoadBalancer] Stopping.")
 }
+
 func runLoadBalancer(cmd *exec.Cmd, restart chan bool, errorChan *chan error) {
 	err := cmd.Run()
 	if err != nil && errorChan != nil {
-		fmt.Println("run errored")
 		*errorChan <- err
 	}
-	fmt.Println("LOAD BALANCER DIED")
+	log.Println("[LoadBalancer] Process died.")
+
+	// Avoid quickly successive failures.
+	<-time.After(10 * time.Second)
 	restart <- true
 }
 
-func updateLoadBalancerConfig(currentInstances map[string]*Instance) (err error) {
+func updateLoadBalancerConfig(client *etcd.Client, currentInstances map[string]*Instance) (err error) {
 	err = nginxConfigurationTemplateErr
+	siteMap := make(map[string][]string) // map of public hostname to private address
 
-	// derrive sites from current instances.
+	// Derive sites from current instances.
+	for _, instance := range currentInstances {
+		if len(instance.Addrs) == 0 {
+			log.Printf("[LoadBalancer] Skipping instance with no known addresses: %s.\n", instance.QualifiedName())
+			continue
+		}
 
-	sites := []SiteConfig{
-		{
-			Name:    "service.com",
-			Servers: []string{"google.com", "yahoo.com", "bing.com"},
-		},
-		{
-			Name:    "other-service.com",
-			Servers: []string{"twitter.com", "plus.google.com", "facebook.com"},
-		},
+		config, err := GetServiceConfig(client, instance.Group, instance.Service)
+		if err != nil {
+			return err
+		}
+
+		if len(config.Http.HostName) == 0 {
+			log.Printf("[LoadBalancer] Skipping instance with no configured hostname: %s.\n", instance.QualifiedName())
+			// This isn't a site container.
+			continue
+		}
+
+		fqdn := instance.Addrs[0].String() //instance.FullyQualifiedDomainName()
+		port := instance.PortMappings[config.Http.ContainerPort]
+		site, exists := siteMap[config.Http.HostName]
+		if !exists {
+			site = make([]string, 0, 4)
+			siteMap[config.Http.HostName] = site
+		}
+
+		siteMap[config.Http.HostName] = append(siteMap[config.Http.HostName], fqdn+":"+port)
 	}
+
+	// Group sites by their hostname (eg: www.thegulaghypercloud.com).
+	sites := make([]SiteConfig, 0, len(siteMap))
+	for host, servers := range siteMap {
+		if len(servers) == 0 {
+			continue
+		}
+
+		log.Printf("[LoadBalancer] Updating configuration for %s (upstream: %s).\n", host, strings.Join(servers, ", "))
+		sites = append(sites, SiteConfig{Name: host, Servers: servers})
+	}
+
+	// Create and write the load balancer configuration file.
 	config, err := createLoadBalancerConfig(sites)
 	if err != nil {
 		return

@@ -5,6 +5,7 @@ import (
 	"github.com/coreos/go-etcd/etcd"
 	"github.com/dotcloud/docker"
 	dockerclient "github.com/fsouza/go-dockerclient"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -15,24 +16,28 @@ const (
 )
 
 // Pull required state changes from the store and attempt to apply them locally.
-func ApplyRequiredStateChanges(dockerClient *dockerclient.Client, etcdClient *etcd.Client, stop chan bool, errors *chan error) {
-	for required := range RequiredStateChanges(etcdClient, stop, errors) {
-		for _, change := range required {
+func ApplyRequiredStateChanges(dockerClient *dockerclient.Client, etcdClient *etcd.Client, requiredChanges chan map[string]*RequiredStateChange, stop chan bool, errors *chan error) {
+	for requiredChange := range requiredChanges {
+		for _, change := range requiredChange {
 			if change.Operation == Add {
-				err := <-prepareForService(dockerClient, change.ServiceConfig)
+				/*err := <-prepareForService(dockerClient, change.ServiceConfig)
 				if err != nil {
 					if errors != nil {
 						*errors <- err
 					}
 					continue
-				}
+				}*/
 
-				// TODO: Acquire a lock before instantiation
-				ready := instantiateService(dockerClient, change.ServiceConfig, change.Instance)
-				err = <-ready
-				close(ready)
-				if err != nil && errors != nil {
-					*errors <- err
+				if err := LockInstance(etcdClient, change.Instance, change.ServiceConfig); err == nil {
+					log.Printf("[DockerRunner] Acquired lock on instance %s", change.ServiceConfig.InstanceQualifiedName(change.Instance))
+					ready := instantiateService(dockerClient, change.ServiceConfig, change.Instance)
+					err = <-ready
+					close(ready)
+					if err != nil && errors != nil {
+						*errors <- err
+					}
+				} else {
+					log.Printf("[DockerRunner] Could not acquire lock: %s", err)
 				}
 			}
 		}
@@ -44,7 +49,7 @@ func ApplyRequiredStateChanges(dockerClient *dockerclient.Client, etcdClient *et
 
 // Prepares for a service to be instantiated by pulling the container's image.
 func prepareForService(client *dockerclient.Client, config *ServiceConfig) (ready chan error) {
-	ready = make(chan error)
+	ready = make(chan error, 1)
 	go func() {
 		//TODO: Account for different registries.
 		imageOpts := dockerclient.PullImageOptions{Repository: config.Container.Image}
@@ -87,15 +92,41 @@ func prepareForService(client *dockerclient.Client, config *ServiceConfig) (read
 
 // Instantiate a service from the provided configuration.
 func instantiateService(client *dockerclient.Client, config *ServiceConfig, instance int) (ready chan error) {
-	ready = make(chan error)
+	ready = make(chan error, 1)
 	go func() {
 		name := config.FullyQualifiedDomainName(instance)
 		creationOptions := dockerclient.CreateContainerOptions{Name: name}
 		containerConfig := &docker.Config{
-			Hostname:   "i" + strconv.Itoa(instance),
-			Domainname: config.QualifiedName(),
-			Cmd:        config.Container.Command,
-			Image:      config.Container.Image,
+			AttachStderr:    config.Container.AttachStderr,
+			AttachStdin:     config.Container.AttachStdin,
+			AttachStdout:    config.Container.AttachStdout,
+			Cmd:             config.Container.Cmd,
+			CpuShares:       config.Container.CpuShares,
+			Dns:             config.Container.Dns,
+			Domainname:      config.Container.Domainname,
+			Entrypoint:      config.Container.Entrypoint,
+			Env:             config.Container.Env,
+			ExposedPorts:    config.Container.ExposedPorts,
+			Hostname:        config.Container.Hostname + "i" + strconv.Itoa(instance),
+			Image:           config.Container.Image,
+			Memory:          config.Container.Memory,
+			MemorySwap:      config.Container.MemorySwap,
+			NetworkDisabled: config.Container.NetworkDisabled,
+			OpenStdin:       config.Container.OpenStdin,
+			PortSpecs:       config.Container.PortSpecs,
+			StdinOnce:       config.Container.StdinOnce,
+			Tty:             config.Container.Tty,
+			User:            config.Container.User,
+			Volumes:         config.Container.Volumes,
+			VolumesFrom:     config.Container.VolumesFrom,
+			WorkingDir:      config.Container.WorkingDir,
+		}
+
+		// Add internal DNS
+		dnsAddrs, err := InternetRoutedIPs() // TODO: Cache?
+		for _, addr := range dnsAddrs {
+			addrString := addr.String()
+			containerConfig.Dns = append(containerConfig.Dns, addrString)
 		}
 
 		// Check if the container already exists and therefore whether it needs to be stopped.
@@ -126,7 +157,7 @@ func instantiateService(client *dockerclient.Client, config *ServiceConfig, inst
 			return
 		}
 
-		hostConfig := &docker.HostConfig{}
+		hostConfig := &docker.HostConfig{PublishAllPorts: true}
 
 		// Start the new container.
 		err = client.StartContainer(container.ID, hostConfig)

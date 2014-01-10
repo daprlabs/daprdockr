@@ -2,12 +2,11 @@ package main
 
 import (
 	goerrors "errors"
-	"github.com/coreos/go-etcd/etcd"
-	"strconv"
+	"log"
 	"time"
 )
 
-var RequiredStateChangeRetry = time.Second * 30
+var RequiredStateChangeRetry = time.Second * 15
 
 type RequiredStateChange struct {
 	ServiceConfig *ServiceConfig
@@ -15,37 +14,33 @@ type RequiredStateChange struct {
 	Instance      int
 }
 
-func RequiredStateChanges(client *etcd.Client, stop chan bool, errors *chan error) (changes chan map[string]*RequiredStateChange) {
-	stopInstances := make(chan bool)
-	stopServiceConfigs := make(chan bool)
+type ServiceState struct {
+	Service   *ServiceConfig
+	Instances []*Instance
+}
 
-	currentInstances := CurrentInstances(client, stopInstances, errors)
-	currentServiceConfigs := CurrentServiceConfigs(client, stopServiceConfigs, errors)
-
-	changes = make(chan map[string]*RequiredStateChange)
+func RequiredStateChanges(instances chan map[string]*Instance, serviceConfigs chan map[string]*ServiceConfig, stop chan bool, errors *chan error) (changes chan map[string]*RequiredStateChange) {
+	changes = make(chan map[string]*RequiredStateChange, 10)
 	go func() {
-		defer close(currentInstances)
-		defer close(currentServiceConfigs)
 		defer close(changes)
 		desired := make(map[string]*ServiceConfig)
 		current := make(map[string]*Instance)
 
-	loop:
 		for {
 			// Wait for a state change or exit condition.
 			select {
-			case newServiceConfigs, ok := <-currentServiceConfigs:
+			case newServiceConfigs, ok := <-serviceConfigs:
 				if !ok {
-					break loop
+					break
 				}
 				desired = newServiceConfigs
-			case newInstances, ok := <-currentInstances:
+			case newInstances, ok := <-instances:
 				if !ok {
-					break loop
+					break
 				}
 				current = newInstances
 			case _, _ = <-stop:
-				break loop
+				break
 			case _ = <-time.After(RequiredStateChangeRetry):
 			}
 
@@ -55,15 +50,16 @@ func RequiredStateChanges(client *etcd.Client, stop chan bool, errors *chan erro
 			// Check for additions and modifications.
 			for _, serviceConfig := range desired {
 				for i := 0; i < serviceConfig.Instances; i++ {
-					key := strconv.Itoa(i) + "." + serviceConfig.QualifiedName()
+					key := serviceConfig.InstanceQualifiedName(i)
 					if _ /*instance*/, exists := current[key]; !exists {
 						change := new(RequiredStateChange)
 						change.ServiceConfig = serviceConfig
 						change.Instance = i
 						change.Operation = Add
 						delta[key] = change
+						log.Printf("[WorkFinder] Need to %s %s\n", change.Operation.String(), key)
 					} else {
-						// Check that instance matches the service config - easiest thing to do is delete the instance
+						// ToDo: Check that instance matches the service config - easiest thing to do is delete the instance
 						// and wait for it to be re-added. Ensure good monitoring for equality issues.
 					}
 				}
@@ -71,28 +67,26 @@ func RequiredStateChanges(client *etcd.Client, stop chan bool, errors *chan erro
 
 			// Check for deletions.
 			for _, instance := range current {
-				key := instance.QualifiedName()
+				key := instance.Service + "." + instance.Group
 				if _ /*serviceConfig*/, exists := desired[key]; !exists {
 					// This instance must be deleted.
 					change := new(RequiredStateChange)
 					change.Instance = instance.Instance
 					change.Operation = Remove
 					delta[key] = change
+					log.Printf("[WorkFinder] Need to %s %d.%s\n", change.Operation.String(), change.Instance, key)
 				}
 			}
 
 			if len(delta) > 0 {
-
 				changes <- delta
+			} else {
+				log.Println("[WorkFinder] All services seem healthy.")
 			}
 		}
 		if errors != nil {
 			*errors <- goerrors.New("Exiting RequiredStateChanges")
 		}
-
-		stopInstances <- true
-		stopServiceConfigs <- true
-		return
 	}()
 	return
 }

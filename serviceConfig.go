@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	goerrors "errors"
 	"github.com/coreos/go-etcd/etcd"
+	"github.com/dotcloud/docker"
+	"log"
+	"reflect"
 	"strconv"
 	"strings"
 )
@@ -17,37 +20,38 @@ type ServiceIdentifier struct {
 func (id *ServiceIdentifier) QualifiedName() string {
 	return id.Name + "." + id.Group
 }
-
 func (id *ServiceIdentifier) FullyQualifiedDomainName(instance int) string {
-	return strconv.Itoa(instance) + "." + id.QualifiedName() + "." + ContainerDomainSuffix
+	return id.InstanceQualifiedName(instance) + "." + ContainerDomainSuffix
+}
+
+func (id *ServiceIdentifier) InstanceQualifiedName(instance int) string {
+	return strconv.Itoa(instance) + "." + id.QualifiedName()
 }
 
 func (id *ServiceIdentifier) Key() string {
-	return id.GroupKey() + "/" + id.Name
+	return GetConfigKey(id.Group, id.Name)
 }
 
-func (id *ServiceIdentifier) GroupKey() string {
-	return "config/services/" + id.Group
+func GetConfigKey(group, name string) string {
+	return "config/services/" + group + "/" + name
 }
 
 type ServiceHttpConfig struct {
 	HostName      string
-	ContainerPort uint16
-}
-
-type ServiceContainerConfig struct {
-	Image   string
-	Command []string
+	ContainerPort string
 }
 
 type ServiceConfig struct {
 	ServiceIdentifier `json:"-"`
 	Instances         int
-
-	Container ServiceContainerConfig
+	Container         docker.Config
 	// The Docker container image used to pull and run the container
 	Http ServiceHttpConfig
 	// TODO: Add [Web] hooks?
+}
+
+func (this *ServiceConfig) Equals(other *ServiceConfig) bool {
+	return reflect.DeepEqual(this, other)
 }
 
 type ServiceConfigUpdate struct {
@@ -74,20 +78,22 @@ func DeleteService(client *etcd.Client, id *ServiceIdentifier) (err error) {
 // Returns a channel publishing the current service configs whenever they change.
 func CurrentServiceConfigs(client *etcd.Client, stop chan bool, errors *chan error) (currentServiceConfigs chan map[string]*ServiceConfig) {
 	serviceConfigMap := make(map[string]*ServiceConfig)
-	applyUpdate := func(update *ServiceConfigUpdate) {
+	updated := func(update *ServiceConfigUpdate) (newServiceConfigMap map[string]*ServiceConfig, changed bool) {
+		newServiceConfigMap = serviceConfigMap
 		name := update.ServiceConfig.QualifiedName()
 		switch update.Operation {
 		case Add:
-			serviceConfigMap[name] = update.ServiceConfig
+			if current, exists := newServiceConfigMap[name]; !exists || !current.Equals(update.ServiceConfig) {
+				newServiceConfigMap[name] = update.ServiceConfig
+				changed = true
+			}
 		case Remove:
-			delete(serviceConfigMap, name)
+			if _, exists := newServiceConfigMap[name]; exists {
+				delete(newServiceConfigMap, name)
+				changed = true
+			}
 		}
 		return
-	}
-
-	updated := func(update *ServiceConfigUpdate) map[string]*ServiceConfig {
-		applyUpdate(update)
-		return serviceConfigMap
 	}
 
 	currentServiceConfigs = make(chan map[string]*ServiceConfig)
@@ -95,13 +101,31 @@ func CurrentServiceConfigs(client *etcd.Client, stop chan bool, errors *chan err
 		defer close(currentServiceConfigs)
 		for update := range serviceConfigUpdates(client, stop, errors) {
 			// Mutate the current service configs collection
-			currentServiceConfigs <- updated(update)
+			newServiceConfigMap, changed := updated(update)
+			if changed {
+				log.Println("[ServiceConfig] Configuration updated.")
+				currentServiceConfigs <- newServiceConfigMap
+			} else {
+				log.Println("[ServiceConfig] NoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAa")
+			}
+
 		}
 		if errors != nil {
 			*errors <- goerrors.New("Exiting CurrentServiceConfigs")
 		}
 	}()
 
+	return
+}
+func GetServiceConfig(client *etcd.Client, group, name string) (config *ServiceConfig, err error) {
+	response, err := client.Get(GetConfigKey(group, name), false, false)
+	if err != nil {
+		return
+	}
+	config, err = parseServiceConfig(response.Node)
+	if err != nil {
+		return
+	}
 	return
 }
 func getServiceConfigs(client *etcd.Client, errors *chan error, serviceConfigs chan *ServiceConfigUpdate) {

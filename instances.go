@@ -6,29 +6,61 @@ import (
 	"errors"
 	goerrors "errors"
 	"github.com/coreos/go-etcd/etcd"
+	"log"
 	"net"
 	"strconv"
 	"strings"
 )
 
+const (
+	UpdateTimeToLive = 20 // Seconds
+	LockTimeToLive   = 60 // Seconds
+)
+
 type Instance struct {
-	Group    string `json:"-"`
-	Service  string `json:"-"`
-	Instance int    `json:"-"`
-	Addrs    []net.IP
-	//PortMappings map[uint16]uint16
+	Group        string `json:"-"`
+	Service      string `json:"-"`
+	Instance     int    `json:"-"`
+	Addrs        []net.IP
+	PortMappings map[string]string // Map from host port to container port.
 }
 
+func (this *Instance) String() string {
+	addrs := make([]string, 0)
+	for _, addr := range this.Addrs {
+		addrs = append(addrs, addr.String())
+	}
+
+	ports := make([]string, 0)
+	for k, v := range this.PortMappings {
+		ports = append(ports, k+":"+v)
+	}
+
+	return this.QualifiedName() + "@" + strings.Join(addrs, ",") + "{" + strings.Join(ports, ",") + "}"
+}
+
+// TODO: Consider using reflect.DeepEqual.
 func (this *Instance) Equals(other *Instance) (equal bool) {
 	if this == other {
 		return true
 	}
-	equal = this.Group == other.Group && this.Service == other.Service && this.Instance == other.Instance && len(this.Addrs) == len(other.Addrs)
+	equal = this.Group == other.Group &&
+		this.Service == other.Service &&
+		this.Instance == other.Instance &&
+		len(this.Addrs) == len(other.Addrs) &&
+		len(this.PortMappings) == len(other.PortMappings)
 	if !equal {
 		return
 	}
 	for i := range this.Addrs {
 		if !bytes.Equal(this.Addrs[i], other.Addrs[i]) {
+			equal = false
+			return
+		}
+	}
+	for key, thisVal := range this.PortMappings {
+		otherVal, exists := other.PortMappings[key]
+		if !exists || otherVal != thisVal {
 			equal = false
 			return
 		}
@@ -66,15 +98,25 @@ type InstanceUpdate struct {
 	Instance  *Instance
 }
 
+func instancePath(group, service string, instance int) string {
+	return "instances/" + group + "/" + service + "/" + strconv.Itoa(instance)
+}
+
 func UpdateInstance(client *etcd.Client, instance *Instance) (err error) {
 	payload, err := json.Marshal(instance)
 	if err != nil {
 		return
 	}
-	_, err = client.Set("instances/"+instance.Group+"/"+instance.Service+"/"+strconv.Itoa(instance.Instance), string(payload), 10)
+	_, err = client.Set(instancePath(instance.Group, instance.Service, instance.Instance), string(payload), UpdateTimeToLive)
 	if err != nil {
 		return
 	}
+	return
+}
+
+func LockInstance(client *etcd.Client, instance int, service *ServiceConfig) (err error) {
+	key := instancePath(service.Group, service.Name, instance)
+	_, err = client.Create(key, "", LockTimeToLive)
 	return
 }
 
@@ -83,22 +125,26 @@ func CurrentInstances(client *etcd.Client, stop chan bool, errors *chan error) (
 	currentInstancesMap := make(map[string]*Instance)
 
 	updated := func(update *InstanceUpdate) (instances map[string]*Instance, changed bool) {
-		name := update.Instance.FullyQualifiedDomainName()
+		instances = currentInstancesMap
+		name := update.Instance.QualifiedName()
 		switch update.Operation {
 		case Add:
-			current, exists := currentInstancesMap[name]
-			if !exists || !current.Equals(update.Instance) {
+			if current, exists := currentInstancesMap[name]; !exists || !current.Equals(update.Instance) {
 				currentInstancesMap[name] = update.Instance
 				changed = true
+				log.Printf("[Instances] Adding %s.\n", update.Instance)
 			}
 		case Remove:
-			delete(currentInstancesMap, name)
-			changed = true
+			if _, exists := currentInstancesMap[name]; exists {
+				delete(currentInstancesMap, name)
+				changed = true
+				log.Printf("[Instances] Removing %s.\n", update.Instance)
+			}
 		}
 		return
 	}
 
-	currentInstances = make(chan map[string]*Instance)
+	currentInstances = make(chan map[string]*Instance, 10)
 	go func() {
 		defer close(currentInstances)
 		for update := range instanceUpdates(client, stop, errors) {
@@ -117,48 +163,71 @@ func CurrentInstances(client *etcd.Client, stop chan bool, errors *chan error) (
 	return
 }
 
-func getInstances(client *etcd.Client, errors *chan error, instances chan *InstanceUpdate) {
+func getInstances(client *etcd.Client, errors *chan error, instances chan *InstanceUpdate) (waitIndex uint64, err error) {
 	response, err := client.Get("instances", false, true)
-	if err != nil && errors != nil {
-		*errors <- err
+	if err != nil {
 		return
 	}
-	for _, n := range response.Node.Nodes {
-		for _, node := range n.Nodes {
-			r, err := client.Get(node.Key, false, true)
-			if err != nil && errors != nil {
-				*errors <- err
-				continue
-			}
-			for _, iNode := range r.Node.Nodes {
-				instance, err := parseInstance(&iNode)
+	waitIndex = response.Node.ModifiedIndex + 1
+
+	go func() {
+		for _, n := range response.Node.Nodes {
+			for _, node := range n.Nodes {
+				r, err := client.Get(node.Key, false, true)
 				if err != nil && errors != nil {
 					*errors <- err
 					continue
 				}
+				for _, iNode := range r.Node.Nodes {
+					instance, err := parseInstance(&iNode)
+					if err != nil && errors != nil {
+						*errors <- err
+						continue
+					}
 
-				instanceUpdate := new(InstanceUpdate)
-				instanceUpdate.Operation = Add
-				instanceUpdate.Instance = instance
-				instances <- instanceUpdate
+					instanceUpdate := new(InstanceUpdate)
+					instanceUpdate.Operation = Add
+					instanceUpdate.Instance = instance
+					instances <- instanceUpdate
+				}
 			}
 		}
-	}
+	}()
+	return
 }
 
 // Returns a channel of all instance updates.
 func instanceUpdates(client *etcd.Client, stop chan bool, errors *chan error) (instances chan *InstanceUpdate) {
-	instances = make(chan *InstanceUpdate)
-	updates := make(chan *etcd.Response)
-	go getInstances(client, errors, instances)
-	go client.Watch("instances", 0, true, updates, stop)
+	instances = make(chan *InstanceUpdate, 10)
+	updates := make(chan *etcd.Response, 10)
+	_, err := getInstances(client, errors, instances)
+	if err != nil {
+		if errors != nil {
+			*errors <- err
+		}
+		return
+	}
+
+	go func() {
+		for {
+			select {
+			case <-stop:
+				break
+			default:
+			}
+			client.Watch("instances", 0, true, updates, stop)
+		}
+	}()
 	go func() {
 		defer close(updates)
 		for update := range updates {
 			instance, err := parseInstanceUpdate(update)
-			if err != nil && errors != nil {
-				*errors <- err
-			} else {
+			if err != nil {
+				if errors != nil {
+					*errors <- err
+				}
+				continue
+			} else if instance != nil {
 				instances <- instance
 			}
 		}
@@ -217,6 +286,10 @@ func parseInstance(node *etcd.Node) (instance *Instance, err error) {
 		if err != nil {
 			return
 		}
+	} else {
+		// This is a lock node.
+		// Note that this is not an error.
+		instance = nil
 	}
 	return
 }
@@ -230,6 +303,11 @@ func parseInstanceUpdate(update *etcd.Response) (instanceUpdate *InstanceUpdate,
 		return
 	}
 
-	instanceUpdate.Instance, err = parseInstance(update.Node)
+	instance, err := parseInstance(update.Node)
+	if instance == nil {
+		instanceUpdate = nil
+	} else {
+		instanceUpdate.Instance = instance
+	}
 	return
 }
