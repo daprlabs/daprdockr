@@ -49,7 +49,7 @@ func createDefaultHandler(errorChan *chan error) (handler func(dns.ResponseWrite
 			response, _, err := externalDns.Exchange(request, server+":"+resolvConf.Port)
 			if err != nil {
 				if debugDnsServer {
-					log.Printf("Error handling request: %s\n", err)
+					log.Printf("Error handling request: %s.\n", err)
 				}
 				if errorChan != nil {
 					*errorChan <- err
@@ -58,7 +58,7 @@ func createDefaultHandler(errorChan *chan error) (handler func(dns.ResponseWrite
 			}
 
 			if debugDnsServer {
-				log.Printf("Default handler response: %s\n", response.String())
+				log.Printf("Default handler response: %s.\n", response.String())
 			}
 			writer.WriteMsg(response)
 			break
@@ -71,7 +71,7 @@ func createContainerHandler(currentInstances chan map[string]*Instance, errorCha
 	var instances *map[string]*Instance
 	go func() {
 		for current := range currentInstances {
-			log.Printf("[DNS] Updating hosts. Hosts: %d\n", len(current))
+			log.Printf("[DNS] Updating hosts. Hosts: %d.\n", len(current))
 			instances = &current
 		}
 	}()
@@ -103,7 +103,7 @@ func createContainerHandler(currentInstances chan map[string]*Instance, errorCha
 		if instance, ok := instances[instanceName]; ok {
 			responseAddresses = instance.Addrs
 		} else if debugDnsServer {
-			log.Printf("[DNS] Could not find entry for %s\n", name)
+			log.Printf("[DNS] Could not find entry for %s.\n", name)
 			writer.WriteMsg(response)
 			return
 		}
@@ -198,7 +198,7 @@ func createContainerHandler(currentInstances chan map[string]*Instance, errorCha
 			}
 		}
 		if debugDnsServer {
-			log.Printf("[DNS] Replying to query for %s with:\n%v\n", name, response.String())
+			log.Printf("[DNS] Replying to query for %s with:\n%v.\n", name, response.String())
 		}
 		writer.WriteMsg(response)
 	}

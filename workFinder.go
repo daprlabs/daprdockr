@@ -57,7 +57,7 @@ func RequiredStateChanges(instances chan map[string]*Instance, serviceConfigs ch
 						change.Instance = i
 						change.Operation = Add
 						delta[key] = change
-						log.Printf("[WorkFinder] Need to %s %s\n", change.Operation.String(), key)
+						log.Printf("[WorkFinder] Need to %s %s.\n", change.Operation.String(), key)
 					} else {
 						// ToDo: Check that instance matches the service config - easiest thing to do is delete the instance
 						// and wait for it to be re-added. Ensure good monitoring for equality issues.
@@ -74,7 +74,7 @@ func RequiredStateChanges(instances chan map[string]*Instance, serviceConfigs ch
 					change.Instance = instance.Instance
 					change.Operation = Remove
 					delta[key] = change
-					log.Printf("[WorkFinder] Need to %s %d.%s\n", change.Operation.String(), change.Instance, key)
+					log.Printf("[WorkFinder] Need to %s %d.%s.\n", change.Operation.String(), change.Instance, key)
 				}
 			}
 
