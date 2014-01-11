@@ -73,7 +73,7 @@ Given a service definition in a file, say `service.json`:
 ```
 You can instantiate that service using `daprdockrcmd`:
 ```
-$ ./daprdockrcmd -set -stdin < new.place.json
+$ ./daprdockrcmd -set -stdin < service.json
 {
   "Name": "web",
   "Group": "service",
