@@ -6,11 +6,13 @@ import (
 	"github.com/miekg/dns"
 	"log"
 	"net"
+	"strconv"
+	"strings"
 	"time"
 )
 
 const (
-	debugDnsServer        = true
+	debugDnsServer        = false
 	compressDnsResponses  = false
 	ContainerDomainSuffix = "container"
 )
@@ -78,11 +80,9 @@ func createContainerHandler(currentInstances chan map[string]*Instance, errorCha
 
 	return func(writer dns.ResponseWriter, request *dns.Msg) {
 		//var txtResponse       string
-		var responseAddresses []net.IP
 		question := request.Question[0]
-		suffixLen := len(ContainerDomainSuffix) + 2
+		containerDomainSuffixLen := len(ContainerDomainSuffix) + 2
 		name := question.Name
-		instanceName := name[:len(name)-suffixLen]
 
 		response := new(dns.Msg)
 		response.SetReply(request)
@@ -100,11 +100,13 @@ func createContainerHandler(currentInstances chan map[string]*Instance, errorCha
 		instances := *instances
 
 		// Check that we have a record matching the request
-		if instance, ok := instances[instanceName]; ok {
-			responseAddresses = instance.Addrs
-		} else if debugDnsServer {
-			log.Printf("[DNS] Could not find entry for %s.\n", name)
-			writer.WriteMsg(response)
+		getInstanceForARecord := func(name string) (instance *Instance, err error) {
+			instanceName := name[:len(name)-containerDomainSuffixLen]
+			instance, ok := instances[instanceName]
+			if !ok {
+				err = errors.New("Could not find entry for " + name)
+				return nil, err
+			}
 			return
 		}
 
@@ -156,6 +158,18 @@ func createContainerHandler(currentInstances chan map[string]*Instance, errorCha
 			return
 		}
 
+		createSRVRecord := func(question, service, target string) (record dns.RR, err error) {
+			record = new(dns.SRV)
+			record.(*dns.SRV).Hdr = dns.RR_Header{Name: question, Rrtype: dns.TypeSRV, Class: dns.ClassINET, Ttl: 0}
+			record.(*dns.SRV).Target = target + "."
+			targetPort, err := strconv.ParseUint(service, 10, 16)
+			record.(*dns.SRV).Port = uint16(targetPort)
+			if err != nil {
+				return
+			}
+			return
+		}
+
 		/*
 			// Tack on a TXT record
 			txtRecord := new(dns.TXT)
@@ -164,30 +178,52 @@ func createContainerHandler(currentInstances chan map[string]*Instance, errorCha
 		*/
 
 		switch question.Qtype {
+		case dns.TypeSRV:
+			parts := strings.SplitN(name[:len(name)-containerDomainSuffixLen], ".", 3)
+			if len(parts) == 3 {
+				privatePort := parts[0]
+				//protocol := parts[1] // Ignored
+				target := parts[2]
+				if instance, ok := instances[target]; ok {
+
+					if publicPort, ok := instance.PortMappings[privatePort]; ok {
+						answer, err := createSRVRecord(name, publicPort, target)
+						if err == nil {
+							response.Answer = append(response.Answer, answer)
+						}
+					}
+				}
+			}
 		/*case dns.TypeTXT:
 		response.Answer = append(response.Answer, txtRecord)
 		*/
 		default:
 			fallthrough
 		case dns.TypeA:
-			answer := tryARecord(responseAddresses, name)
-			if answer == nil {
-				answer = tryAAAARecord(responseAddresses, name)
+			instance, err := getInstanceForARecord(name)
+			if err == nil {
+				answer := tryARecord(instance.Addrs, name)
+				if answer == nil {
+					answer = tryAAAARecord(instance.Addrs, name)
+				}
+				if answer != nil {
+					response.Answer = append(response.Answer, answer)
+				}
+				//response.Extra = append(response.Extra, txtRecord)
 			}
-			if answer != nil {
-				response.Answer = append(response.Answer, answer)
-			}
-			//response.Extra = append(response.Extra, txtRecord)
 		case dns.TypeAAAA:
-			answer := tryAAAARecord(responseAddresses, name)
-			if answer == nil {
-				answer = tryARecord(responseAddresses, name)
-			}
-			if answer != nil {
+			instance, err := getInstanceForARecord(name)
+			if err == nil {
+				answer := tryAAAARecord(instance.Addrs, name)
+				if answer == nil {
+					answer = tryARecord(instance.Addrs, name)
+				}
+				if answer != nil {
 
-				response.Answer = append(response.Answer, answer)
+					response.Answer = append(response.Answer, answer)
+				}
+				//response.Extra = append(response.Extra, txtRecord)
 			}
-			//response.Extra = append(response.Extra, txtRecord)
 		}
 
 		if request.IsTsig() != nil {
