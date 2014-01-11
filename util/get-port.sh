@@ -9,7 +9,7 @@ DELIM
 }
 
 [[ $# -lt 2 ]] && usage && exit
-[[ ${1} -eq '-h' ]] && usage && exit
+[[ ${1} == '-h' ]] && usage && exit
 
 INSTANCE=${1} # Instance must be specified, in the form '<instance>.<service>.<group>'.
 PORT=${2} # Port must be specified

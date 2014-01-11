@@ -1,10 +1,10 @@
 package main
 
 import (
-	"daprdockr"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/ReubenBond/daprdockr"
 	"github.com/coreos/go-etcd/etcd"
 	"os"
 	"strings"

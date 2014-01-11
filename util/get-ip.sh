@@ -14,4 +14,4 @@ DELIM
 INSTANCE=${1} # Instance must be specified, in the form '<instance>.<service>.<group>'.
 NAMESERVER=${2+'@'$2} # Use default nameserver if not specified.
 
-dig ${NAMESERVER} ${INSTANCE}.container +short A #| cut -d" " -f3
+dig ${NAMESERVER} ${INSTANCE}.container +short A
