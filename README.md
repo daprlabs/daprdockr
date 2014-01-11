@@ -52,6 +52,66 @@ Usage of ./daprdockrcmd:
   -v=false: Provide verbose output.
 ```
 
+#### Example
+
+Given a service definition in a file, say `service.json`:
+```javascript
+{
+  "Name": "web",
+  "Group": "service",
+  "Instances": 5,
+  "Container": {
+    "Image": "daprlabs/testwebapp"
+    },
+  "Http": {
+    "HostName": "service.com",
+    "ContainerPort": "80"
+  }
+}
+
+
+```
+You can instantiate that service using `daprdockrcmd`:
+```
+$ ./daprdockrcmd -set -stdin < new.place.json
+{
+  "Name": "web",
+  "Group": "service",
+  "Instances": 5,
+  "Container": {
+    "Hostname": "",
+    "Domainname": "",
+    "User": "",
+    "Memory": 0,
+    "MemorySwap": 0,
+    "CpuShares": 0,
+    "AttachStdin": false,
+    "AttachStdout": false,
+    "AttachStderr": false,
+    "PortSpecs": null,
+    "ExposedPorts": null,
+    "Tty": false,
+    "OpenStdin": false,
+    "StdinOnce": false,
+    "Env": null,
+    "Cmd": null,
+    "Dns": null,
+    "Image": "daprlabs/testwebapp",
+    "Volumes": null,
+    "VolumesFrom": "",
+    "WorkingDir": "",
+    "Entrypoint": null,
+    "NetworkDisabled": false
+  },
+  "Http": {
+    "HostName": "service.com",
+    "ContainerPort": "80"
+  }
+}
+```
+
+Assuming that _service.com_ is pointed at your docker hosts (`/etc/hosts` helps for testing), you can watch `daprdockrd` as it spins up your containers and configures DNS and the HTTP Load Balancer (Nginx).
+
 ### Querying containers via DNS
 Two basics forms of query, both leverage the special `.container` pseudo-top-level-domain:
 
