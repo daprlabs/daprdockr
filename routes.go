@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-const (
+var (
 	Route4FilePath = "/proc/net/route"
 	Route6FilePath = "/proc/net/ipv6_route"
 )

@@ -19,7 +19,8 @@ const (
 )
 
 var etcdAddresses = flag.String("etcd", "http://localhost:5001,http://localhost:5002,http://localhost:5003", "Comma separated list of URLs of the cluster's etcd.")
-var dockerAddress = flag.String("docker", "unix:///var/run/docker.sock", "URLs of the local docker instance.")
+var dockerAddress = flag.String("docker", "unix:///var/run/docker.sock", "Docker's remote API endpoint.")
+var routeFile = flag.String("route", "/proc/net/route", "Location of the container host's route file.")
 var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 
 func main() {
@@ -43,6 +44,8 @@ func main() {
 	if err != nil {
 		log.Printf("[DaprDockr] Failed to create Docker client at address %s: %s.\n", *dockerAddress, err)
 	}
+
+	daprdockr.Route4FilePath = *routeFile
 
 	// Push changes from the local Docker instance into etcd.
 	go daprdockr.PushStateChangesIntoStore(dockerClient, etcdClient, stop)

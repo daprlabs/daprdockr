@@ -22,6 +22,7 @@ const (
 type instances struct {
 	Heartbeats chan *Instance
 	Flatlines  chan *Instance
+	Updated    chan bool
 }
 
 var Instances = &instances{}
@@ -29,6 +30,7 @@ var Instances = &instances{}
 func init() {
 	Instances.Heartbeats = make(chan *Instance)
 	Instances.Flatlines = make(chan *Instance)
+	Instances.Updated = make(chan bool, 1)
 }
 
 type Instance struct {
@@ -287,6 +289,12 @@ func getAllInstances(client *etcd.Client, instances chan *InstanceUpdate) {
 				instanceUpdate.Operation = Add
 				instanceUpdate.Instance = instance
 				instances <- instanceUpdate
+			}
+
+			// Notify any since interested party that an update occurred.
+			select {
+			case Instances.Updated <- true:
+			default:
 			}
 		}
 	}

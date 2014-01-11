@@ -16,6 +16,16 @@ const (
 	FullServiceConfigSyncInterval = 65
 )
 
+type serviceConfigs struct {
+	Updated chan bool
+}
+
+var ServiceConfigs serviceConfigs
+
+func init() {
+	ServiceConfigs.Updated = make(chan bool, 1)
+}
+
 // Uniquely identifies a service.
 type ServiceIdentifier struct {
 	Name  string
@@ -213,6 +223,12 @@ func getServiceConfigs(client *etcd.Client, serviceConfigs chan *ServiceConfigUp
 			serviceConfigUpdate.Operation = Add
 			serviceConfigUpdate.ServiceConfig = serviceConfig
 			serviceConfigs <- serviceConfigUpdate
+		}
+
+		// Notify any since interested party that an update occurred.
+		select {
+		case ServiceConfigs.Updated <- true:
+		default:
 		}
 	}
 	log.Printf("[ServiceConfig] Pulled configurations.\n")

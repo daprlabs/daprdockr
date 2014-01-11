@@ -35,23 +35,25 @@ func RequiredStateChanges(instances chan map[string]*Instance, serviceConfigs ch
 					break
 				}
 				desired = newServiceConfigs
-				configsValid = true
 			case newInstances, ok := <-instances:
 				if !ok {
 					break
 				}
 				current = newInstances
-				instancesValid = true
 			case _, _ = <-stop:
 				break
 			case _ = <-time.After(RequiredStateChangeRetry):
 			}
 			if !instancesValid {
-				log.Printf("[WorkFinder] Waiting for instance status before creating work.\n")
+				log.Printf("[WorkFinder] Waiting for full instance status update before creating work.\n")
+				<-Instances.Updated
+				instancesValid = true
 				continue
 			}
 			if !configsValid {
-				log.Printf("[WorkFinder] Waiting for configuration before creating work.\n")
+				log.Printf("[WorkFinder] Waiting for full configuration update before creating work.\n")
+				<-ServiceConfigs.Updated
+				configsValid = true
 				continue
 			}
 
