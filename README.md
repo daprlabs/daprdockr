@@ -116,6 +116,7 @@ Requirements
 
 Each cluster note must have network access to:
 - etcd
+
 Each cluster node must have:
 - docker
 - nginx
