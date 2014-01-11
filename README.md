@@ -52,13 +52,19 @@ Usage of ./daprdockrcmd:
   -v=false: Provide verbose output.
 ```
 
-### Querying containers via DNS ###
-Two basics forms of query.
-. `<instance>.<service>.<group>.container` for A and AAAA queries.
-This can be used to find the IP of the host the container is running on.
- #### Example ####
- ```
- $ dig @localhost 1.web.service.container
+### Querying containers via DNS
+Two basics forms of query, both leverage the special `.container` pseudo-top-level-domain:
+
+1. `<instance>.<service>.<group>.container` for A (IPv4 address) and [AAAA](http://en.wikipedia.org/wiki/IPv6_address#IPv6_addresses_in_the_Domain_Name_System) (IPv6 address) queries.
+  * This can be used to find the IP of the host the container is running on.
+2. `<private port>.<protocol>.<instance>.<service>.<group>.container` for [SRV](http://en.wikipedia.org/wiki/SRV_record) queries.
+  * This can be used for discovering port mappings. Currently, _protocol_ is ignored.
+
+
+#### A Record Query
+
+```
+$ dig @localhost 1.web.service.container
 
 ; <<>> DiG 9.9.2-P2 <<>> @localhost 1.web.service.container
 ; (2 servers found)
@@ -80,10 +86,7 @@ This can be used to find the IP of the host the container is running on.
 ;; MSG SIZE  rcvd: 80
 ```
 
-. `<private port>.<protocol>.<instance>.<service>.<group>.container` for SRV queries.
-This can be used for discovering port mappings. Currently, _protocol_ is ignored.
-
-#### Example ####
+#### SRV Record Query
 Below, we can see that port 80 inside the container is mapped to port 49169 on the host.
 ```
 $ dig @localhost 80.tcp.1.web.service.container SRV
@@ -110,9 +113,9 @@ $ dig @localhost 80.tcp.1.web.service.container SRV
 
 Requirements
 ------------
+
 Each cluster note must have network access to:
 - etcd
-- 
 Each cluster node must have:
 - docker
 - nginx
