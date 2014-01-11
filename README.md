@@ -52,13 +52,79 @@ Usage of ./daprdockrcmd:
   -v=false: Provide verbose output.
 ```
 
-### Querying containers via DNS ###
-Two basics forms of query.
-. `<instance>.<service>.<group>.container` for A and AAAA queries.
-This can be used to find the IP of the host the container is running on.
- #### Example ####
- ```
- $ dig @localhost 1.web.service.container
+#### Example
+
+Given a service definition in a file, say `service.json`:
+```javascript
+{
+  "Name": "web",
+  "Group": "service",
+  "Instances": 5,
+  "Container": {
+    "Image": "daprlabs/testwebapp"
+    },
+  "Http": {
+    "HostName": "service.com",
+    "ContainerPort": "80"
+  }
+}
+
+
+```
+You can instantiate that service using `daprdockrcmd`:
+```
+$ ./daprdockrcmd -set -stdin < service.json
+{
+  "Name": "web",
+  "Group": "service",
+  "Instances": 5,
+  "Container": {
+    "Hostname": "",
+    "Domainname": "",
+    "User": "",
+    "Memory": 0,
+    "MemorySwap": 0,
+    "CpuShares": 0,
+    "AttachStdin": false,
+    "AttachStdout": false,
+    "AttachStderr": false,
+    "PortSpecs": null,
+    "ExposedPorts": null,
+    "Tty": false,
+    "OpenStdin": false,
+    "StdinOnce": false,
+    "Env": null,
+    "Cmd": null,
+    "Dns": null,
+    "Image": "daprlabs/testwebapp",
+    "Volumes": null,
+    "VolumesFrom": "",
+    "WorkingDir": "",
+    "Entrypoint": null,
+    "NetworkDisabled": false
+  },
+  "Http": {
+    "HostName": "service.com",
+    "ContainerPort": "80"
+  }
+}
+```
+
+Assuming that _service.com_ is pointed at your docker hosts (`/etc/hosts` helps for testing), you can watch `daprdockrd` as it spins up your containers and configures DNS and the HTTP Load Balancer (Nginx).
+
+### Querying containers via DNS
+Two basics forms of query, both leverage the special `.container` pseudo-top-level-domain:
+
+1. `<instance>.<service>.<group>.container` for A (IPv4 address) and [AAAA](http://en.wikipedia.org/wiki/IPv6_address#IPv6_addresses_in_the_Domain_Name_System) (IPv6 address) queries.
+  * This can be used to find the IP of the host the container is running on.
+2. `<private port>.<protocol>.<instance>.<service>.<group>.container` for [SRV](http://en.wikipedia.org/wiki/SRV_record) queries.
+  * This can be used for discovering port mappings. Currently, _protocol_ is ignored.
+
+
+#### A Record Query
+
+```
+$ dig @localhost 1.web.service.container
 
 ; <<>> DiG 9.9.2-P2 <<>> @localhost 1.web.service.container
 ; (2 servers found)
@@ -80,10 +146,7 @@ This can be used to find the IP of the host the container is running on.
 ;; MSG SIZE  rcvd: 80
 ```
 
-. `<private port>.<protocol>.<instance>.<service>.<group>.container` for SRV queries.
-This can be used for discovering port mappings. Currently, _protocol_ is ignored.
-
-#### Example ####
+#### SRV Record Query
 Below, we can see that port 80 inside the container is mapped to port 49169 on the host.
 ```
 $ dig @localhost 80.tcp.1.web.service.container SRV
@@ -110,9 +173,10 @@ $ dig @localhost 80.tcp.1.web.service.container SRV
 
 Requirements
 ------------
+
 Each cluster note must have network access to:
 - etcd
-- 
+
 Each cluster node must have:
 - docker
 - nginx
