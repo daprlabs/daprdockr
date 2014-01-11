@@ -34,7 +34,7 @@ Usage of ./daprdockrd:
   -etcd="http://localhost:5001,http://localhost:5002,http://localhost:5003": Comma separated list of URLs of the cluster's etcd.
 ```
 
-### Commandline Interface ###
+### Utility ###
 `daprdockrcmd -help`
 ```
 Usage of ./daprdockrcmd:
@@ -50,6 +50,62 @@ Usage of ./daprdockrcmd:
   -stdin=false: Read JSON service definition from stdin.
   -svc="": The service to operate on, in the form "<service>.<group>".
   -v=false: Provide verbose output.
+```
+
+### Querying containers via DNS ###
+Two basics forms of query.
+. `<instance>.<service>.<group>.container` for A and AAAA queries.
+This can be used to find the IP of the host the container is running on.
+ #### Example ####
+ ```
+ $ dig @localhost 1.web.service.container
+
+; <<>> DiG 9.9.2-P2 <<>> @localhost 1.web.service.container
+; (2 servers found)
+;; global options: +cmd
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 34170
+;; flags: qr rd; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 0
+;; WARNING: recursion requested but not available
+
+;; QUESTION SECTION:
+;1.web.service.container.	IN	A
+
+;; ANSWER SECTION:
+1.web.service.container. 0	IN	A	192.168.1.10
+
+;; Query time: 0 msec
+;; SERVER: ::1#53(::1)
+;; WHEN: Sat Jan 11 20:58:03 2014
+;; MSG SIZE  rcvd: 80
+```
+
+. `<private port>.<protocol>.<instance>.<service>.<group>.container` for SRV queries.
+This can be used for discovering port mappings. Currently, _protocol_ is ignored.
+
+#### Example ####
+Below, we can see that port 80 inside the container is mapped to port 49169 on the host.
+```
+$ dig @localhost 80.tcp.1.web.service.container SRV
+; <<>> DiG 9.9.2-P2 <<>> @localhost 80.tcp.1.web.service.container SRV
+; (2 servers found)
+;; global options: +cmd
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 51248
+;; flags: qr rd; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 0
+;; WARNING: recursion requested but not available
+
+;; QUESTION SECTION:
+;80.tcp.1.web.service.container.	IN	SRV
+
+;; ANSWER SECTION:
+80.tcp.1.web.service.container.	0 IN	SRV	0 0 49169 1.web.service.
+
+;; Query time: 1 msec
+;; SERVER: ::1#53(::1)
+;; WHEN: Sat Jan 11 20:50:23 2014
+;; MSG SIZE  rcvd: 111
+
 ```
 
 Requirements

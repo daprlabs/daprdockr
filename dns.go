@@ -161,7 +161,7 @@ func createContainerHandler(currentInstances chan map[string]*Instance, errorCha
 		createSRVRecord := func(question, service, target string) (record dns.RR, err error) {
 			record = new(dns.SRV)
 			record.(*dns.SRV).Hdr = dns.RR_Header{Name: question, Rrtype: dns.TypeSRV, Class: dns.ClassINET, Ttl: 0}
-			record.(*dns.SRV).Target = target + "."
+			record.(*dns.SRV).Target = target
 			targetPort, err := strconv.ParseUint(service, 10, 16)
 			record.(*dns.SRV).Port = uint16(targetPort)
 			if err != nil {
@@ -183,10 +183,11 @@ func createContainerHandler(currentInstances chan map[string]*Instance, errorCha
 			if len(parts) == 3 {
 				privatePort := parts[0]
 				//protocol := parts[1] // Ignored
-				target := parts[2]
-				if instance, ok := instances[target]; ok {
+				instanceName := parts[2]
+				if instance, ok := instances[instanceName]; ok {
 
 					if publicPort, ok := instance.PortMappings[privatePort]; ok {
+						target := strings.SplitN(name, ".", 3)[2]
 						answer, err := createSRVRecord(name, publicPort, target)
 						if err == nil {
 							response.Answer = append(response.Answer, answer)
