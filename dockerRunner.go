@@ -42,7 +42,7 @@ func ApplyRequiredStateChanges(dockerClient *dockerclient.Client, etcdClient *et
 				}
 			case Remove:
 				log.Printf("[DockerRunner] Attempting to remove instance %s.\n", instanceName)
-				err := tryRemoveContainer(dockerClient, change.ServiceConfig, change.Instance)
+				err := removeContainer(dockerClient, change.ServiceConfig, change.Instance)
 				if err != nil {
 					log.Printf("[DockerRunner] Failed to remove instance %s. Instance might not exist locally. %s\n", instanceName, err)
 				} else {
@@ -93,8 +93,8 @@ func prepareForService(client *dockerclient.Client, config *ServiceConfig) (err 
 }
 
 // Instantiate a service from the provided configuration.
-func instantiateService(client *dockerclient.Client, config *ServiceConfig, instance int) (err error) {
-	name := config.FullyQualifiedDomainName(instance)
+func instantiateService(client *dockerclient.Client, config *ServiceConfig, instanceNum int) (err error) {
+	name := config.FullyQualifiedDomainName(instanceNum)
 	creationOptions := dockerclient.CreateContainerOptions{Name: name}
 	containerConfig := &docker.Config{
 		AttachStderr:    config.Container.AttachStderr,
@@ -107,7 +107,7 @@ func instantiateService(client *dockerclient.Client, config *ServiceConfig, inst
 		Entrypoint:      config.Container.Entrypoint,
 		Env:             config.Container.Env,
 		ExposedPorts:    config.Container.ExposedPorts,
-		Hostname:        config.Container.Hostname + "i" + strconv.Itoa(instance),
+		Hostname:        config.Container.Hostname + "i" + strconv.Itoa(instanceNum),
 		Image:           config.Container.Image,
 		Memory:          config.Container.Memory,
 		MemorySwap:      config.Container.MemorySwap,
@@ -130,7 +130,7 @@ func instantiateService(client *dockerclient.Client, config *ServiceConfig, inst
 	}
 
 	// Check if the container already exists and therefore whether it needs to be stopped.
-	tryRemoveContainer(client, config, instance)
+	removeContainer(client, config, instanceNum)
 
 	// Create the new container with the new configuration
 	container, err := client.CreateContainer(creationOptions, containerConfig)
@@ -145,27 +145,44 @@ func instantiateService(client *dockerclient.Client, config *ServiceConfig, inst
 	if err != nil {
 		return
 	}
+
+	// Heartbeat the container.
+	instance, err := instanceFromContainer(name, container)
+	if err != nil {
+		return
+	}
+
+	Instances.Heartbeats <- instance
 	return
 }
 
-func tryRemoveContainer(client *dockerclient.Client, config *ServiceConfig, instance int) (err error) {
-	name := config.FullyQualifiedDomainName(instance)
+func removeContainer(client *dockerclient.Client, config *ServiceConfig, instanceNum int) (err error) {
+	name := config.FullyQualifiedDomainName(instanceNum)
 	container, err := client.InspectContainer(name)
-	if err == nil || container != nil {
-		// Stop or kill the named container.
-		err = client.StopContainer(name, ContainerStopTimeout)
-		if err != nil {
-			err = client.KillContainer(name)
-			if err != nil {
-				return
-			}
-		}
-
-		// Remove the stopped container, ignoring any potential error.
-		err = client.RemoveContainer(name)
+	if err != nil {
+		return
+	}
+	// Stop or kill the named container.
+	err = client.StopContainer(name, ContainerStopTimeout)
+	if err != nil {
+		err = client.KillContainer(name)
 		if err != nil {
 			return
 		}
 	}
+
+	// Remove the stopped container, ignoring any potential error.
+	err = client.RemoveContainer(name)
+	if err != nil {
+		return
+	}
+
+	// Notify that the instance has stopped.
+	instance, err := instanceFromContainer(name, container)
+	if err != nil {
+		return
+	}
+
+	Instances.Flatlines <- instance
 	return
 }

@@ -19,7 +19,7 @@ type ServiceState struct {
 }
 
 func RequiredStateChanges(instances chan map[string]*Instance, serviceConfigs chan map[string]*ServiceConfig, stop chan bool) (changes chan map[string]*RequiredStateChange) {
-	changes = make(chan map[string]*RequiredStateChange, 10)
+	changes = make(chan map[string]*RequiredStateChange)
 	go func() {
 		defer close(changes)
 		desired := make(map[string]*ServiceConfig)
@@ -47,11 +47,11 @@ func RequiredStateChanges(instances chan map[string]*Instance, serviceConfigs ch
 			case _ = <-time.After(RequiredStateChangeRetry):
 			}
 			if !instancesValid {
-				log.Printf("[WorkFinder] Waiting for both instance status before creating work.\n")
+				log.Printf("[WorkFinder] Waiting for instance status before creating work.\n")
 				continue
 			}
 			if !configsValid {
-				log.Printf("[WorkFinder] Waiting for both configuration before creating work.\n")
+				log.Printf("[WorkFinder] Waiting for configuration before creating work.\n")
 				continue
 			}
 

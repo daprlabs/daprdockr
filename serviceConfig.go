@@ -80,8 +80,69 @@ func DeleteService(client *etcd.Client, id *ServiceIdentifier) (err error) {
 	return
 }
 
+// Sends the latest service configurations to the output channel.
+// Multiple subsequent messages are suppressed and only the latest value is made available for consumers.
+func LatestServiceConfigs(etcdClient *etcd.Client, stop chan bool, throttleInterval time.Duration) chan map[string]*ServiceConfig {
+	incomingUpdates := currentServiceConfigs(etcdClient, stop)
+	return latestServiceConfigUpdates(incomingUpdates, throttleInterval)
+}
+
+// Forwards messages from the provided channel to the output channel.
+// Multiple subsequent messages are suppressed and only the latest value is made available for consumers.
+func latestServiceConfigUpdates(incomingUpdates chan map[string]*ServiceConfig, throttleInterval time.Duration) chan map[string]*ServiceConfig {
+	// Consumer channel.
+	consumer := make(chan map[string]*ServiceConfig)
+
+	// Shared channels.
+	updateAvailable := make(chan bool, 1)
+	latestUpdate := make(chan map[string]*ServiceConfig)
+
+	// Get updates as they are made available.
+	go func() {
+		var latest map[string]*ServiceConfig
+		for {
+			select {
+			case latestUpdate <- latest:
+				// The latest update has been retrieved.
+			case latest = <-incomingUpdates:
+				// A new update has arrived.
+				select {
+				case updateAvailable <- true:
+				// Notify of an update, if not already notified.
+				default:
+				}
+			}
+		}
+	}()
+
+	// Provide only the latest update to the consumer.
+	go func() {
+		throttler := time.NewTicker(throttleInterval)
+
+		// Wait for initial update to be made available.
+		<-updateAvailable
+		for {
+			// Retrieve update.
+			update := <-latestUpdate
+
+			// Either wait for another update (and retrieve it), or pass the latest update to the consumer.
+			select {
+			case <-updateAvailable:
+				// Another update became available before the previous one was consumed.
+			case consumer <- update:
+				// The latest update has been consumed.
+				// Wait for throttler.
+				<-throttler.C
+				// Wait for another update.
+				<-updateAvailable
+			}
+		}
+	}()
+	return consumer
+}
+
 // Returns a channel publishing the current service configs whenever they change.
-func CurrentServiceConfigs(client *etcd.Client, stop chan bool) (currentServiceConfigs chan map[string]*ServiceConfig) {
+func currentServiceConfigs(client *etcd.Client, stop chan bool) (currentServiceConfigs chan map[string]*ServiceConfig) {
 	serviceConfigMap := make(map[string]*ServiceConfig)
 	updated := func(update *ServiceConfigUpdate) (newServiceConfigMap map[string]*ServiceConfig, changed bool) {
 		newServiceConfigMap = serviceConfigMap
@@ -160,11 +221,10 @@ func getServiceConfigs(client *etcd.Client, serviceConfigs chan *ServiceConfigUp
 // Returns a channel of all service configuration updates.
 func serviceConfigUpdates(client *etcd.Client, stop chan bool) (updates chan *ServiceConfigUpdate) {
 	updates = make(chan *ServiceConfigUpdate)
-	incomingUpdates := make(chan *etcd.Response)
 
 	go func() {
 		getServiceConfigs(client, updates)
-		watchChan := make(chan *etcd.Response)
+		incomingUpdates := make(chan *etcd.Response)
 		go func() {
 			for {
 				select {
@@ -175,26 +235,21 @@ func serviceConfigUpdates(client *etcd.Client, stop chan bool) (updates chan *Se
 				client.Watch("config/services", 0, true, incomingUpdates, stop)
 			}
 		}()
+		fullSync := time.NewTicker(FullServiceConfigSyncInterval * time.Second)
 		for {
 			select {
 			case <-stop:
 				break
-			case <-time.After(FullServiceConfigSyncInterval * time.Second):
+			case <-fullSync.C:
 				getServiceConfigs(client, updates)
-			case update := <-watchChan:
-				incomingUpdates <- update
-			}
-		}
-	}()
-	go func() {
-		defer close(incomingUpdates)
-		for update := range incomingUpdates {
-			config, err := parseServiceConfigUpdate(update)
-			if err != nil {
-				log.Printf("[ServiceConfig] Unable to parse update: %s\n", err)
-				continue
-			} else {
-				updates <- config
+			case incomingUpdate := <-incomingUpdates:
+				config, err := parseServiceConfigUpdate(incomingUpdate)
+				if err != nil {
+					log.Printf("[ServiceConfig] Unable to parse update: %s\n", err)
+					continue
+				} else {
+					updates <- config
+				}
 			}
 		}
 	}()

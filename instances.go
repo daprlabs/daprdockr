@@ -14,10 +14,22 @@ import (
 )
 
 const (
-	UpdateTimeToLive         = 20 // Seconds
+	UpdateTimeToLive         = 10 // Seconds
 	LockTimeToLive           = 60 // Seconds
 	FullInstanceSyncInterval = 60 // Seconds
 )
+
+type instances struct {
+	Heartbeats chan *Instance
+	Flatlines  chan *Instance
+}
+
+var Instances = &instances{}
+
+func init() {
+	Instances.Heartbeats = make(chan *Instance)
+	Instances.Flatlines = make(chan *Instance)
+}
 
 type Instance struct {
 	Group        string `json:"-"`
@@ -58,14 +70,20 @@ type Operation int
 const (
 	Add Operation = iota
 	Remove
+	Heartbeat // Instance is alive
+	Flatline  // Instance has died
 )
 
 func (op Operation) String() (result string) {
 	switch op {
 	case Add:
-		result = "add"
+		result = "Add"
 	case Remove:
-		result = "remove"
+		result = "Remove"
+	case Heartbeat:
+		result = "Heartbeat"
+	case Flatline:
+		result = "Flatline"
 	}
 	return
 }
@@ -79,12 +97,20 @@ func instancePath(group, service string, instance int) string {
 	return "instances/" + group + "/" + service + "/" + strconv.Itoa(instance)
 }
 
-func UpdateInstance(client *etcd.Client, instance *Instance) (err error) {
+func updateInstanceInStore(client *etcd.Client, instance *Instance) (err error) {
 	payload, err := json.Marshal(instance)
 	if err != nil {
 		return
 	}
 	_, err = client.Set(instancePath(instance.Group, instance.Service, instance.Instance), string(payload), UpdateTimeToLive)
+	if err != nil {
+		return
+	}
+	return
+}
+
+func removeInstanceFromStore(client *etcd.Client, instance *Instance) (err error) {
+	_, err = client.Delete(instancePath(instance.Group, instance.Service, instance.Instance), false)
 	if err != nil {
 		return
 	}
@@ -97,25 +123,122 @@ func LockInstance(client *etcd.Client, instance int, service *ServiceConfig) (er
 	return
 }
 
+// Broadcasts the latest instance updates to the output channels.
+// Multiple subsequent messages to any given channel are suppressed and only the latest value is made available for consumers.
+func LatestInstances(etcdClient *etcd.Client, stop chan bool, numChans int, throttleInterval time.Duration) (outgoing []chan map[string]*Instance) {
+	incomingUpdates := currentInstances(etcdClient, stop)
+	return latestInstanceUpdates(incomingUpdates, numChans, throttleInterval)
+}
+
+// Broadcasts messages from the provided channel to the output channels.
+// Multiple subsequent messages to any given channel are suppressed and only the latest value is made available for consumers.
+func latestInstanceUpdates(incomingUpdates chan map[string]*Instance, numChans int, throttleInterval time.Duration) (outgoing []chan map[string]*Instance) {
+	outgoing = make([]chan map[string]*Instance, 0, numChans)
+	incoming := make([]chan map[string]*Instance, 0, numChans)
+	for i := 0; i < numChans; i++ {
+		incoming = append(incoming, make(chan map[string]*Instance))
+		outgoing = append(outgoing, latestInstances(incoming[i], throttleInterval))
+	}
+	go func() {
+		for instances := range incomingUpdates {
+			for _, ch := range incoming {
+				select {
+				case ch <- instances:
+				default:
+				}
+			}
+		}
+	}()
+	return
+}
+
+// Forwards messages from the provided channel to the output channel.
+// Multiple subsequent messages are suppressed and only the latest value is made available for consumers.
+func latestInstances(incomingUpdates chan map[string]*Instance, throttleInterval time.Duration) chan map[string]*Instance {
+	// Consumer channel.
+	consumer := make(chan map[string]*Instance)
+
+	// Shared channels.
+	updateAvailable := make(chan bool, 1)
+	latestUpdate := make(chan map[string]*Instance)
+
+	// Get updates as they are made available.
+	go func() {
+		var latest map[string]*Instance
+		for {
+			select {
+			case latestUpdate <- latest:
+				// The latest update has been retrieved.
+			case latest = <-incomingUpdates:
+				// A new update has arrived.
+				select {
+				case updateAvailable <- true:
+				// Notify of an update, if not already notified.
+				default:
+				}
+			}
+		}
+	}()
+
+	// Provide only the latest update to the consumer.
+	go func() {
+		throttler := time.NewTicker(throttleInterval)
+
+		// Wait for initial update to be made available.
+		<-updateAvailable
+		for {
+			// Retrieve update.
+			update := <-latestUpdate
+
+			// Either wait for another update (and retrieve it), or pass the latest update to the consumer.
+			select {
+			case <-updateAvailable:
+				// Another update became available before the previous one was consumed.
+			case consumer <- update:
+				// The latest update has been consumed.
+				// Wait for throttler.
+				<-throttler.C
+				// Wait for another update.
+				<-updateAvailable
+			}
+		}
+	}()
+	return consumer
+}
+
 // Returns a channel publishing the current instances whenever they change.
-func CurrentInstances(client *etcd.Client, stop chan bool) (currentInstances chan map[string]*Instance) {
+func currentInstances(client *etcd.Client, stop chan bool) (currentInstances chan map[string]*Instance) {
 	currentInstancesMap := make(map[string]*Instance)
 
 	updated := func(update *InstanceUpdate) (instances map[string]*Instance, changed bool) {
 		instances = currentInstancesMap
 		name := update.Instance.QualifiedName()
 		switch update.Operation {
+		case Heartbeat:
+			log.Printf("[Instances] Heartbeat %s.\n", name)
+			err := updateInstanceInStore(client, update.Instance)
+			if err != nil {
+				log.Printf("[Instances] Failed to update store with heartbeat for %s.\n", name)
+			}
+			fallthrough
 		case Add:
 			if current, exists := currentInstancesMap[name]; !exists || !current.Equals(update.Instance) {
 				currentInstancesMap[name] = update.Instance
 				changed = true
-				log.Printf("[Instances] Adding %s.\n", update.Instance)
+				log.Printf("[Instances] Adding %s.\n", name)
 			}
+		case Flatline:
+			log.Printf("[Instances] Flatline %s.\n", name)
+			err := removeInstanceFromStore(client, update.Instance)
+			if err != nil {
+				log.Printf("[Instances] Failed to update store with demise of %s.\n", name)
+			}
+			fallthrough
 		case Remove:
 			if _, exists := currentInstancesMap[name]; exists {
 				delete(currentInstancesMap, name)
 				changed = true
-				log.Printf("[Instances] Removing %s.\n", update.Instance)
+				log.Printf("[Instances] Removing %s.\n", name)
 			}
 		}
 		return
@@ -173,10 +296,10 @@ func getAllInstances(client *etcd.Client, instances chan *InstanceUpdate) {
 // Returns a channel of all instance updates.
 func instanceUpdates(client *etcd.Client, stop chan bool) (updates chan *InstanceUpdate) {
 	updates = make(chan *InstanceUpdate)
-	incomingUpdates := make(chan *etcd.Response)
 
 	go func() {
-		watchChan := make(chan *etcd.Response)
+		getAllInstances(client, updates)
+		incomingUpdates := make(chan *etcd.Response)
 		go func() {
 			for {
 				select {
@@ -184,30 +307,33 @@ func instanceUpdates(client *etcd.Client, stop chan bool) (updates chan *Instanc
 					break
 				default:
 				}
-				client.Watch("instances", 0, true, watchChan, stop)
+				client.Watch("instances", 0, true, incomingUpdates, stop)
 			}
 		}()
-		getAllInstances(client, updates)
+		fullSync := time.NewTicker(FullInstanceSyncInterval * time.Second)
 		for {
 			select {
 			case <-stop:
 				break
-			case <-time.After(FullInstanceSyncInterval * time.Second):
+			case <-fullSync.C:
 				getAllInstances(client, updates)
-			case incomingUpdate := <-watchChan:
-				incomingUpdates <- incomingUpdate
-			}
-		}
-	}()
-	go func() {
-		defer close(incomingUpdates)
-		for update := range incomingUpdates {
-			instance, err := parseInstanceUpdate(update)
-			if err != nil {
-				log.Printf("[Instances] Unable to parse instance update: %s.\n", err)
-				continue
-			} else {
-				updates <- instance
+			case incomingUpdate := <-incomingUpdates:
+				instance, err := parseInstanceUpdate(incomingUpdate)
+				if err != nil {
+					log.Printf("[Instances] Unable to parse instance update: %s.\n", err)
+				} else {
+					updates <- instance
+				}
+			case instance := <-Instances.Heartbeats:
+				update := new(InstanceUpdate)
+				update.Instance = instance
+				update.Operation = Heartbeat
+				updates <- update
+			case instance := <-Instances.Flatlines:
+				update := new(InstanceUpdate)
+				update.Instance = instance
+				update.Operation = Flatline
+				updates <- update
 			}
 		}
 	}()
@@ -263,7 +389,7 @@ func parseInstance(node *etcd.Node) (instance *Instance, err error) {
 		}
 	} else {
 		// This is a lock node.
-		err = errors.New("Attempted to parse lock node.")
+		err = errors.New("Attempted to parse lock node")
 		instance = nil
 	}
 	return

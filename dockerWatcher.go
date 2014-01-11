@@ -34,17 +34,12 @@ func PushStateChangesIntoStore(dockerClient *dockerclient.Client, etcdClient *et
 					// This container isn't managed by this system.
 					continue
 				}
-				instance, err := instanceFromContainer(container)
+				instance, err := instanceFromAPIContainer(&container)
 				if err != nil {
 					log.Printf("[DockerWatcher] Updated deriving instance from container %s for %s.\n", container, err)
 					continue
 				}
-				err = UpdateInstance(etcdClient, instance)
-				if err != nil {
-					log.Printf("[DockerWatcher] Error updating instance %s: %s.\n", instance, err)
-					continue
-				}
-				log.Printf("[DockerWatcher] Heartbeat %s.\n", instance.QualifiedName())
+				Instances.Heartbeats <- instance
 			}
 		}
 	}
@@ -61,9 +56,22 @@ func containerInstanceName(names []string) (result string) {
 	}
 	return
 }
+func instanceFromContainer(name string, container *docker.Container) (instance *Instance, err error) {
+	networkSettings := container.NetworkSettings
+	if networkSettings == nil {
+		networkSettings = new(docker.NetworkSettings)
+	}
 
-func instanceFromContainer(container docker.APIContainers) (instance *Instance, err error) {
-	name := strings.Split(containerInstanceName(container.Names), ".")
+	apiContainer := &docker.APIContainers{
+		ID:    container.ID,
+		Image: container.Image,
+		Names: []string{name},
+		Ports: networkSettings.PortMappingAPI(),
+	}
+	return instanceFromAPIContainer(apiContainer)
+}
+func instanceFromAPIContainer(apiContainer *docker.APIContainers) (instance *Instance, err error) {
+	name := strings.Split(containerInstanceName(apiContainer.Names), ".")
 	instance = new(Instance)
 
 	instance.Instance, err = strconv.Atoi(name[0])
@@ -74,7 +82,7 @@ func instanceFromContainer(container docker.APIContainers) (instance *Instance, 
 		return
 	}
 	instance.PortMappings = make(map[string]string)
-	for _, portMapping := range container.Ports {
+	for _, portMapping := range apiContainer.Ports {
 		private := strconv.FormatInt(portMapping.PrivatePort, 10)
 		public := strconv.FormatInt(portMapping.PublicPort, 10)
 		instance.PortMappings[private] = public
