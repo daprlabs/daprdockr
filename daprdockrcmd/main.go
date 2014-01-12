@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/ReubenBond/daprdockr"
 	"github.com/coreos/go-etcd/etcd"
+	"github.com/daprlabs/daprdockr"
 	"os"
 	"strings"
 )

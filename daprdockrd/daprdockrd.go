@@ -2,8 +2,8 @@ package main
 
 import (
 	"flag"
-	"github.com/ReubenBond/daprdockr"
 	"github.com/coreos/go-etcd/etcd"
+	"github.com/daprlabs/daprdockr"
 	"github.com/fsouza/go-dockerclient"
 	"log"
 	"net"
