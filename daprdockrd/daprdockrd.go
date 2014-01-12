@@ -26,10 +26,10 @@ const (
 )
 
 var etcdHostsFlag = flag.String(EtcdHostsFlag,
-	"http://localhost:5001,http://localhost:5002,http://localhost:5003",
-	"Comma separated list of URLs of the cluster's etcd. Overrides "+EtcdHostsEnv+" environment variable.")
+	"",
+	"\n\tComma separated list of URLs of the cluster's etcd.\n\tOverrides "+EtcdHostsEnv+" environment variable.\n\tExample: http://localhost:5001,http://localhost:5002,http://localhost:5003")
 var dockerSockFlag = flag.String(DockerSockFlag,
-	"unix:///var/run/docker.sock",
+	"",
 	"Docker's remote API endpoint. Overrides "+DockerSockEnv+" environment variable.")
 var hostIpFlag = flag.String(HostIpFlag,
 	"",
