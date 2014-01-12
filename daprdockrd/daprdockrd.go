@@ -39,7 +39,9 @@ var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 
 func getFlagOrEnv(flagName, envName string) string {
 	envVal := os.Getenv(envName)
+	log.Printf("[%s]=\"%s\"", envName, envVal)
 	flagVal := flag.Lookup(flagName).Value.String()
+	log.Printf("[%s]=\"%s\"", flagName, flagVal)
 	if flagVal == "" {
 		return envVal
 	}
@@ -74,6 +76,10 @@ func main() {
 		}
 	}
 	daprdockr.SetHostIp(hostIp)
+
+	log.Print("[DaprDockr] etcd: ", etcdHosts)
+	log.Print("[DaprDockr] docker: ", dockerSock)
+	log.Print("[DaprDockr] route file: ", *routeFile)
 	log.Print("[DaprDockr] Host IP: ", hostIp)
 
 	etcdAddrs := strings.Split(etcdHosts, ",")
@@ -88,10 +94,6 @@ func main() {
 	}
 
 	daprdockr.Route4FilePath = *routeFile
-
-	log.Print("[DaprDockr] etcd: ", etcdHosts)
-	log.Print("[DaprDockr] docker: ", dockerSock)
-	log.Print("[DaprDockr] route file: ", *routeFile)
 
 	// Push changes from the local Docker instance into etcd.
 	go daprdockr.PushStateChangesIntoStore(dockerClient, etcdClient, stop)
