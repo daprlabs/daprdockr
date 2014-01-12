@@ -11,6 +11,8 @@ For example, 1.web.myapp.container will point to instance 1 of the "web" service
 
 DaprDockr manages child Nginx processes to provide containers with HTTP load balancing and reverse proxy support. To leverage this feature, the service configuration must specify an HTTP hostname (eg: gulaghypercloud.com) and the HTTP port inside the container (eg: "9000" for Play! Framework).
 
+<a href="http://imgur.com/WWgbdq0"><img src="http://i.imgur.com/WWgbdq0.png" title="Some DaprDockr daemon output" /></a>
+
 Features
 --------
 - Simple commandline interface for controlling a cluster of docker + etcd nodes.
