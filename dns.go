@@ -110,8 +110,16 @@ func createContainerHandler(currentInstances chan map[string]*Instance, errorCha
 			return
 		}
 
-		addr4 := func(addrs []net.IP) (result net.IP, err error) {
+		getIpAddrs := func(addrs []string) (result []net.IP) {
+			result = make([]net.IP, 0, len(addrs))
 			for _, addr := range addrs {
+				result = append(result, net.ParseIP(addr))
+			}
+			return
+		}
+
+		addr4 := func(addrs []string) (result net.IP, err error) {
+			for _, addr := range getIpAddrs(addrs) {
 				converted := addr.To4()
 				if converted != nil {
 					result = converted
@@ -123,8 +131,8 @@ func createContainerHandler(currentInstances chan map[string]*Instance, errorCha
 			return
 		}
 
-		addr6 := func(addrs []net.IP) (result net.IP, err error) {
-			for _, addr := range addrs {
+		addr6 := func(addrs []string) (result net.IP, err error) {
+			for _, addr := range getIpAddrs(addrs) {
 				converted := addr.To16()
 				if converted != nil {
 					result = converted
@@ -136,7 +144,7 @@ func createContainerHandler(currentInstances chan map[string]*Instance, errorCha
 			return
 		}
 
-		tryARecord := func(addrs []net.IP, name string) (record dns.RR) {
+		tryARecord := func(addrs []string, name string) (record dns.RR) {
 			if address, err := addr4(addrs); err == nil {
 				record = new(dns.A)
 				record.(*dns.A).Hdr = dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 0}
@@ -147,7 +155,7 @@ func createContainerHandler(currentInstances chan map[string]*Instance, errorCha
 			return
 		}
 
-		tryAAAARecord := func(addrs []net.IP, name string) (record dns.RR) {
+		tryAAAARecord := func(addrs []string, name string) (record dns.RR) {
 			if address, err := addr6(addrs); err == nil {
 				record = new(dns.AAAA)
 				record.(*dns.AAAA).Hdr = dns.RR_Header{Name: name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: 0}

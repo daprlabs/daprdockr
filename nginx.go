@@ -154,7 +154,7 @@ func updateLoadBalancerConfig(client *etcd.Client, currentInstances map[string]*
 			continue
 		}
 
-		fqdn := instance.Addrs[0].String() //instance.FullyQualifiedDomainName()
+		fqdn := instance.Addrs[0]
 		port := instance.PortMappings[config.Http.ContainerPort]
 		site, exists := siteMap[config.Http.HostName]
 		if !exists {

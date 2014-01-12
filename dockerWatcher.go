@@ -5,7 +5,6 @@ import (
 	"github.com/dotcloud/docker"
 	dockerclient "github.com/fsouza/go-dockerclient"
 	"log"
-	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -79,7 +78,7 @@ func instanceFromAPIContainer(apiContainer *docker.APIContainers) (instance *Ins
 	if err != nil {
 		return
 	}
-	instance.Addrs = []net.IP{hostIp}
+	instance.Addrs = []string{hostIp.String()}
 	instance.PortMappings = make(map[string]string)
 	for _, portMapping := range apiContainer.Ports {
 		private := strconv.FormatInt(portMapping.PrivatePort, 10)

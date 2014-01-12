@@ -39,9 +39,7 @@ var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 
 func getFlagOrEnv(flagName, envName string) string {
 	envVal := os.Getenv(envName)
-	log.Printf("[%s]=\"%s\"", envName, envVal)
 	flagVal := flag.Lookup(flagName).Value.String()
-	log.Printf("[%s]=\"%s\"", flagName, flagVal)
 	if flagVal == "" {
 		return envVal
 	}
@@ -79,8 +77,7 @@ func main() {
 
 	log.Print("[DaprDockr] etcd: ", etcdHosts)
 	log.Print("[DaprDockr] docker: ", dockerSock)
-	log.Print("[DaprDockr] route file: ", *routeFile)
-	log.Print("[DaprDockr] Host IP: ", hostIp)
+	log.Print("[DaprDockr] host: ", hostIp)
 
 	etcdAddrs := strings.Split(etcdHosts, ",")
 	etcdClient := etcd.NewClient(etcdAddrs)

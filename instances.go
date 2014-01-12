@@ -6,7 +6,6 @@ import (
 	goerrors "errors"
 	"github.com/coreos/go-etcd/etcd"
 	"log"
-	"net"
 	"reflect"
 	"strconv"
 	"strings"
@@ -37,22 +36,17 @@ type Instance struct {
 	Group        string `json:"-"`
 	Service      string `json:"-"`
 	Instance     int    `json:"-"`
-	Addrs        []net.IP
+	Addrs        []string
 	PortMappings map[string]string // Map from host port to container port.
 }
 
 func (this *Instance) String() string {
-	addrs := make([]string, 0)
-	for _, addr := range this.Addrs {
-		addrs = append(addrs, addr.String())
-	}
-
 	ports := make([]string, 0)
 	for k, v := range this.PortMappings {
 		ports = append(ports, k+":"+v)
 	}
 
-	return this.QualifiedName() + "@" + strings.Join(addrs, ",") + "{" + strings.Join(ports, ",") + "}"
+	return this.QualifiedName() + "@" + strings.Join(this.Addrs, ",") + "{" + strings.Join(ports, ",") + "}"
 }
 
 func (this *Instance) Equals(other *Instance) (equal bool) {
