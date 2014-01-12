@@ -27,6 +27,9 @@ Planned
 
 Usage
 -----
+
+*NOTE:* The easiest way to use this is via the [daprlabs/daprdockr](https://github.com/daprlabs/docker-daprdockrd/) container on a [CoreOS](http://coreos.com/) box. See the link for run info. The container is prebuilt on the [Docker public index](https://index.docker.io/u/daprlabs/docker-daprdockrd/).
+
 ### Daemon ###
 `daprdockrd -help`:
 ```
