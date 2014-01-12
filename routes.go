@@ -177,6 +177,8 @@ func parseRoutes4(interfaces map[string]net.Interface) (routes []RouteEntry, err
 
 	return
 }
+
+// Parse IPv4 routes file line.
 func parseRoute4(routeText string, interfaces map[string]net.Interface) (route RouteEntry, err error) {
 	columns := strings.Fields(routeText)
 	systemInterface, ok := interfaces[columns[0]]
@@ -186,17 +188,17 @@ func parseRoute4(routeText string, interfaces map[string]net.Interface) (route R
 	}
 	route.Iface = systemInterface
 
-	route.Destination, err = parseIP(columns[1])
+	route.Destination, err = parseHexIP(columns[1])
 	if err != nil {
 		return route, err
 	}
 
-	route.Gateway, err = parseIP(columns[2])
+	route.Gateway, err = parseHexIP(columns[2])
 	if err != nil {
 		return route, err
 	}
 
-	mask, err := parseIP(columns[3])
+	mask, err := parseHexIP(columns[3])
 	if err != nil {
 		return route, err
 	}
@@ -238,17 +240,17 @@ func parseRoute6(routeText string, interfaces map[string]net.Interface) (route R
 	}
 	route.Iface = systemInterface
 
-	route.Destination, err = parseIP(columns[0])
+	route.Destination, err = parseHexIP(columns[0])
 	if err != nil {
 		return route, err
 	}
 
-	route.Gateway, err = parseIP(columns[3])
+	route.Gateway, err = parseHexIP(columns[3])
 	if err != nil {
 		return route, err
 	}
 
-	mask, err := parseIP(columns[3])
+	mask, err := parseHexIP(columns[3])
 	if err != nil {
 		return route, err
 	}
@@ -256,7 +258,7 @@ func parseRoute6(routeText string, interfaces map[string]net.Interface) (route R
 	return
 }*/
 
-func parseIP(hexBytes string) (ip net.IP, err error) {
+func parseHexIP(hexBytes string) (ip net.IP, err error) {
 
 	ipBytes, err := hex.DecodeString(hexBytes)
 	if err != nil {
