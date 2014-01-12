@@ -16,6 +16,7 @@ var get = flag.Bool("get", true, "Get service configuration.")
 var del = flag.Bool("del", false, "Delete service configuration.")
 
 var verbose = flag.Bool("v", false, "Provide verbose output.")
+var printIp = flag.Bool("ip", false, "Prints the local \"Internet routed\" IP.")
 var service = flag.String("svc", "", "The service to operate on, in the form \"<service>.<group>\".")
 
 var instances = flag.Int("instances", 0, "The target number of service instances.")
@@ -29,6 +30,17 @@ func main() {
 	flag.Parse()
 	config := new(daprdockr.ServiceConfig)
 	var err error
+
+	if *printIp {
+		ipAddr, err := daprdockr.InternetRoutedIp()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %s.\n", err)
+			return
+		}
+
+		fmt.Println(ipAddr)
+		return
+	}
 
 	etcdAddrs := strings.Split(*etcdAddresses, ",")
 	etcdClient := etcd.NewClient(etcdAddrs)

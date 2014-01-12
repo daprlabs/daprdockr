@@ -6,6 +6,7 @@ import (
 	"github.com/coreos/go-etcd/etcd"
 	"github.com/fsouza/go-dockerclient"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"runtime/pprof"
@@ -16,12 +17,34 @@ import (
 
 const (
 	UpdateThrottleInterval = 2 // Seconds
+	DockerSockFlag         = "docker"
+	DockerSockEnv          = "DOCKER_SOCK"
+	EtcdHostsFlag          = "etcd"
+	EtcdHostsEnv           = "ETCD_HOSTS"
+	HostIpFlag             = "host"
+	HostIpEnv              = "HOST_IP"
 )
 
-var etcdAddresses = flag.String("etcd", "http://localhost:5001,http://localhost:5002,http://localhost:5003", "Comma separated list of URLs of the cluster's etcd.")
-var dockerAddress = flag.String("docker", "unix:///var/run/docker.sock", "Docker's remote API endpoint.")
+var etcdHostsFlag = flag.String(EtcdHostsFlag,
+	"http://localhost:5001,http://localhost:5002,http://localhost:5003",
+	"Comma separated list of URLs of the cluster's etcd. Overrides "+EtcdHostsEnv+" environment variable.")
+var dockerSockFlag = flag.String(DockerSockFlag,
+	"unix:///var/run/docker.sock",
+	"Docker's remote API endpoint. Overrides "+DockerSockEnv+" environment variable.")
+var hostIpFlag = flag.String(HostIpFlag,
+	"",
+	"Docker host IP address. Overrides "+HostIpEnv+" environment variable.")
 var routeFile = flag.String("route", "/proc/net/route", "Location of the container host's route file.")
 var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
+
+func getFlagOrEnv(flagName, envName string) string {
+	envVal := os.Getenv(envName)
+	flagVal := flag.Lookup(flagName).Value.String()
+	if flagVal == "" {
+		return envVal
+	}
+	return flagVal
+}
 
 func main() {
 	var err error
@@ -35,17 +58,40 @@ func main() {
 		defer pprof.StopCPUProfile()
 	}
 
-	etcdAddrs := strings.Split(*etcdAddresses, ",")
+	etcdHosts := getFlagOrEnv(EtcdHostsFlag, EtcdHostsEnv)
+	dockerSock := getFlagOrEnv(DockerSockFlag, DockerSockEnv)
+	hostIpStr := getFlagOrEnv(HostIpFlag, HostIpEnv)
+
+	var hostIp net.IP
+
+	if hostIpStr != "" {
+		hostIp = net.ParseIP(hostIpStr)
+	} else {
+		hostIp, err = daprdockr.InternetRoutedIp()
+		if err != nil {
+			log.Printf("[DaprDockr] Failed to discover host IP: %s.\n", err)
+			return
+		}
+	}
+	daprdockr.SetHostIp(hostIp)
+	log.Print("[DaprDockr] Host IP: ", hostIp)
+
+	etcdAddrs := strings.Split(etcdHosts, ",")
 	etcdClient := etcd.NewClient(etcdAddrs)
 
 	stop := make(chan bool)
 
-	dockerClient, err := docker.NewClient(*dockerAddress)
+	dockerClient, err := docker.NewClient(dockerSock)
 	if err != nil {
-		log.Printf("[DaprDockr] Failed to create Docker client at address %s: %s.\n", *dockerAddress, err)
+		log.Printf("[DaprDockr] Failed to create Docker client at address %s: %s.\n", dockerSock, err)
+		return
 	}
 
 	daprdockr.Route4FilePath = *routeFile
+
+	log.Print("[DaprDockr] etcd: ", etcdHosts)
+	log.Print("[DaprDockr] docker: ", dockerSock)
+	log.Print("[DaprDockr] route file: ", *routeFile)
 
 	// Push changes from the local Docker instance into etcd.
 	go daprdockr.PushStateChangesIntoStore(dockerClient, etcdClient, stop)

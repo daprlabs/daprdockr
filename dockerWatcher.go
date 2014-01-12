@@ -5,6 +5,7 @@ import (
 	"github.com/dotcloud/docker"
 	dockerclient "github.com/fsouza/go-dockerclient"
 	"log"
+	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -13,9 +14,6 @@ import (
 const (
 	DockerWatcherPollInterval = 5 // Seconds.
 )
-
-// Cache the local IP address.
-var localIPs, localIPsErr = InternetRoutedIPs()
 
 func PushStateChangesIntoStore(dockerClient *dockerclient.Client, etcdClient *etcd.Client, stop chan bool) {
 	for {
@@ -77,10 +75,11 @@ func instanceFromAPIContainer(apiContainer *docker.APIContainers) (instance *Ins
 	instance.Instance, err = strconv.Atoi(name[0])
 	instance.Service = name[1]
 	instance.Group = name[2]
-	instance.Addrs, err = localIPs, localIPsErr
+	hostIp, err := HostIp()
 	if err != nil {
 		return
 	}
+	instance.Addrs = []net.IP{hostIp}
 	instance.PortMappings = make(map[string]string)
 	for _, portMapping := range apiContainer.Ports {
 		private := strconv.FormatInt(portMapping.PrivatePort, 10)

@@ -18,6 +18,9 @@ var (
 var internetDestintationIPv4 = []byte{0, 0, 0, 0}
 var internetDestintationIPv6 = []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 
+// The IP address of the docker host.
+var hostIp net.IP
+
 /*
 type Flags uint
 
@@ -34,8 +37,33 @@ const (
 )
 */
 
+// Sets IP address of the docker host.
+func SetHostIp(ip net.IP) {
+	hostIp = make(net.IP, 0, len(ip))
+	hostIp = append(hostIp, ip...)
+}
+
+// Gets the IP address of the docker host.
+func HostIp() (ip net.IP, err error) {
+	if len(hostIp) == 0 {
+		err = errors.New("Host IP unknown")
+		return
+	}
+	ip = hostIp
+	return
+}
+
+func InternetRoutedIp() (ip net.IP, err error) {
+	ips, err := internetRoutedIps()
+	if err != nil && len(ips) == 0 {
+		return
+	}
+	ip = ips[0]
+	return
+}
+
 // Returns a collection of IP addresses which have a route to the Internet
-func InternetRoutedIPs() (ips []net.IP, err error) {
+func internetRoutedIps() (ips []net.IP, err error) {
 	routes, err := parseRoutes()
 	if err != nil {
 		return

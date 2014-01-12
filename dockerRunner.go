@@ -123,11 +123,11 @@ func instantiateService(client *dockerclient.Client, config *ServiceConfig, inst
 	}
 
 	// Add internal DNS
-	dnsAddrs, err := InternetRoutedIPs() // TODO: Cache?
-	for _, addr := range dnsAddrs {
-		addrString := addr.String()
-		containerConfig.Dns = append(containerConfig.Dns, addrString)
+	dnsAddrs, err := HostIp()
+	if err != nil {
+		return
 	}
+	containerConfig.Dns = append(containerConfig.Dns, dnsAddrs.String())
 
 	// Check if the container already exists and therefore whether it needs to be stopped.
 	removeContainer(client, config, instanceNum)
