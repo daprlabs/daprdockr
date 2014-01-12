@@ -11,17 +11,19 @@ For example, 1.web.myapp.container will point to instance 1 of the "web" service
 
 DaprDockr manages child Nginx processes to provide containers with HTTP load balancing and reverse proxy support. To leverage this feature, the service configuration must specify an HTTP hostname (eg: gulaghypercloud.com) and the HTTP port inside the container (eg: "9000" for Play! Framework).
 
+<a href="http://imgur.com/WWgbdq0"><img src="http://i.imgur.com/WWgbdq0.png" title="Some DaprDockr daemon output" /></a>
+
 Features
 --------
 - Simple commandline interface for controlling a cluster of docker + etcd nodes.
 - `daprdockrd` agents on each cluster node race to satisfy the service configurations stored in etcd by starting or stopping containers.
 - HTTP Load Balancer / Reverse Proxy support for containers via Nginx.
 - DNS Server for looking up the current location of a container.
+- DNS Server handles SRV records for discovering port mappings at runtime.
 
 Planned
 -------
 - Agents should load balance containers across all nodes, rather than being greedy.
-- DNS SRV records for discovering port mappings at runtime.
 
 Usage
 -----
@@ -121,9 +123,12 @@ Two basics forms of query, both leverage the special `.container` pseudo-top-lev
   * This can be used for discovering port mappings. Currently, _protocol_ is ignored.
 
 
-#### A Record Query
+#### Query container IP
 
 ```
+# Note that @localhost is used as the nameserver in this example, since it was run
+# directly on the daprdockrd instance. If it were run inside the container, @localhost
+# should be omitted.
 $ dig @localhost 1.web.service.container
 
 ; <<>> DiG 9.9.2-P2 <<>> @localhost 1.web.service.container
@@ -146,7 +151,15 @@ $ dig @localhost 1.web.service.container
 ;; MSG SIZE  rcvd: 80
 ```
 
-#### SRV Record Query
+For convenience, [`get-ip.sh`](/util/get-ip.sh), is included for outputting just the public port.
+```
+# Note that when testing from outside a managed container,
+# the address of the daprdockr daemon must be provided as the nameserver.
+$ ./get-ip.sh 1.web.service
+192.168.1.10
+```
+
+#### Query container port mappings.
 Below, we can see that port 80 inside the container is mapped to port 49169 on the host.
 ```
 $ dig @localhost 80.tcp.1.web.service.container SRV
@@ -169,6 +182,21 @@ $ dig @localhost 80.tcp.1.web.service.container SRV
 ;; WHEN: Sat Jan 11 20:50:23 2014
 ;; MSG SIZE  rcvd: 111
 
+```
+
+For convenience, [`get-port.sh`](/util/get-port.sh), is included for outputting just the mapped port.
+```
+# Note that when testing from outside a managed container,
+# the address of the daprdockr daemon must be provided as the nameserver.
+$ ./get-port.sh 1.web.service 80
+49175
+```
+For additional convenience, [`get-ip-port.sh`](/util/get-ip-port.sh) is included for outputting the ip:port combo.
+```
+# Note that when testing from outside a managed container,
+# the address of the daprdockr daemon must be provided as the nameserver.
+$ ./get-port.sh 1.web.service 80
+192.168.1.10:49175
 ```
 
 Requirements
