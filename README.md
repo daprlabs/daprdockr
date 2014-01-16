@@ -222,13 +222,3 @@ For additional convenience, [`get-ip-port.sh`](/util/get-ip-port.sh) is included
 $ ./get-port.sh 1.web.service 80
 192.168.1.10:49175
 ```
-
-Requirements
-------------
-
-Each cluster note must have network access to:
-- etcd
-
-Each cluster node must have:
-- docker
-- nginx
