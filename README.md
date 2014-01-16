@@ -21,6 +21,27 @@ Features
 - DNS Server for looking up the current location of a container.
 - DNS Server handles SRV records for discovering port mappings at runtime.
 
+Architecture
+------------
+DaprDockr is split into a few conceptual components:
+-  **Watcher**
+
+    The watcher listen the local docker state and pumps it into etcd for all of the nodes to see.
+- **WorkFinder**
+
+    The work finder compares the configuration in etcd with the current statuses in etcd and produces a stream of work to be completed by the local instance.
+- **Runner**
+
+    The runner listens to the work finder and tries to start/stop containers to satisfy the requirements. Etcd is used as a distributed lock to ensure that only the required number of containers are running for any given service.
+- **DNS**
+
+    The dns server listens for changes in the currently running instances on all nodes and provides DNS routes to each of them. The DNS server is provided to each container which the runner starts. SRV queries can be used to find port mappings.
+- **LoadBalancer**
+
+    The load balancer component listens for changes in the currently running instances on all nodes and passes that   information to a locally running Nginx instance. The load balancer also manages the lifecycle of Nginx.
+
+These components all reside in the `daprdockrd` executable which will typically be run in a container on the host which it's managing. See [docker-daprdockrd](https://github.com/daprlabs/docker-daprdockrd) for example.
+
 Planned
 -------
 - Agents should load balance containers across all nodes, rather than being greedy.
@@ -201,13 +222,3 @@ For additional convenience, [`get-ip-port.sh`](/util/get-ip-port.sh) is included
 $ ./get-port.sh 1.web.service 80
 192.168.1.10:49175
 ```
-
-Requirements
-------------
-
-Each cluster note must have network access to:
-- etcd
-
-Each cluster node must have:
-- docker
-- nginx
